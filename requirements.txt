@@ -1,0 +1,28 @@
+# Spark-ling Project Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core Spark
+pyspark==3.4.1
+
+# Data manipulation
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Synthetic data generation
+faker>=18.0.0
+
+# Jupyter for notebooks
+jupyter>=1.0.0
+notebook>=7.0.0
+ipykernel>=6.29.0,<6.30.0
+traitlets>=5.9.0,<5.14.0
+
+# Delta Lake (optional - modern lakehouse)
+delta-spark==2.4.0
+
+# Testing
+pytest>=7.0.0
+
+# Utilities
+python-dateutil>=2.8.0
+pyarrow>=12.0.0
