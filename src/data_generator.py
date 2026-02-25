@@ -35,7 +35,7 @@ except ImportError:
 random.seed(42)
 
 # Project paths
-PROJECT_ROOT = Path(__file__).parent.parent
+PROJECT_ROOT = Path.cwd().parent
 DATA_RAW = PROJECT_ROOT / "data" / "raw"
 
 # Constants
@@ -250,19 +250,30 @@ def generate_transactions(accounts: List[Dict], n: int = 500000) -> List[Dict[st
 
 
 def save_to_csv(data: List[Dict], filename: str) -> None:
-    """Save data to CSV file."""
+    """Save data to CSV file. If data is too large, split into multiple files."""
     if not data:
         return
-    
-    filepath = DATA_RAW / filename
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    
-    with open(filepath, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=data[0].keys())
-        writer.writeheader()
-        writer.writerows(data)
-    
-    print(f"✅ Saved {len(data):,} records to {filepath}")
+    batch_size = 100000
+    if len(data) > batch_size:
+        num_parts = (len(data) + batch_size - 1) // batch_size
+        for part in range(num_parts):
+            part_data = data[part*batch_size : (part+1)*batch_size]
+            part_filename = f"{filename.replace('.csv','')}_part{part+1}.csv"
+            filepath = DATA_RAW / part_filename
+            filepath.parent.mkdir(parents=True, exist_ok=True)
+            with open(filepath, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=part_data[0].keys())
+                writer.writeheader()
+                writer.writerows(part_data)
+            print(f"✅ Saved {len(part_data):,} records to {filepath}")
+    else:
+        filepath = DATA_RAW / filename
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        with open(filepath, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=data[0].keys())
+            writer.writeheader()
+            writer.writerows(data)
+        print(f"✅ Saved {len(data):,} records to {filepath}")
 
 
 def main():

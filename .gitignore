@@ -41,8 +41,3 @@ Thumbs.db
 # Logs
 *.log
 logs/
-
-# GCP credentials (never commit!)
-gcp/.env
-gcp/*.json
-
