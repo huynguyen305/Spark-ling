@@ -26,3 +26,8 @@ pytest>=7.0.0
 # Utilities
 python-dateutil>=2.8.0
 pyarrow>=12.0.0
+
+# GCP (optional - install for cloud development)
+# pip install -r requirements.txt  ← installs these too
+google-cloud-storage>=2.10.0
+gcsfs>=2023.6.0
