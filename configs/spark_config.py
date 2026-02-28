@@ -1,21 +1,20 @@
 """
-Spark Configuration for Local & GCP Development
-==================================================
-Supports two modes:
-  - "local"  → Runs on your machine with local[*] (default, unchanged)
-  - "gcp"    → Runs on GCP Dataproc with GCS data paths
+Spark Configuration for Local, GCP & Databricks Development
+==============================================================
+Supports three modes:
+  - "local"       → Runs on your machine with local[*] (default)
+  - "gcp"         → Runs on GCP Dataproc with GCS data paths
+  - "databricks"  → Runs on Databricks serverless, data on GCS
 
 Usage:
-    # Local development (unchanged from before)
-    from configs.spark_config import get_spark_session
-    spark = get_spark_session("MyApp")
+    # Auto-detect environment (recommended)
+    from configs.spark_config import get_spark_session, get_data_path, detect_mode
+    mode = detect_mode()  # "local", "gcp", or "databricks"
+    spark = get_spark_session("MyApp", mode=mode)
+    raw = get_data_path("raw", mode=mode)
 
-    # GCP Dataproc (submitted via gcp/submit_job.sh)
-    spark = get_spark_session("MyApp", mode="gcp")
-
-    # Get data path that works in both modes
-    from configs.spark_config import get_data_path
-    raw = get_data_path("raw")  # local: data/raw, gcp: gs://bucket/data/raw
+    # Or explicitly set mode
+    spark = get_spark_session("MyApp", mode="databricks")
 """
 
 import os
@@ -34,6 +33,22 @@ os.environ["PATH"] = str(HADOOP_HOME / "bin") + os.pathsep + os.environ.get("PAT
 DATA_RAW = PROJECT_ROOT / "data" / "raw"
 DATA_PROCESSED = PROJECT_ROOT / "data" / "processed"
 DATA_ANALYTICS = PROJECT_ROOT / "data" / "analytics"
+
+
+# ── Environment detection ───────────────────────────────────
+def detect_mode() -> str:
+    """
+    Auto-detect which execution environment we're running in.
+
+    Returns:
+        "databricks", "gcp", or "local"
+    """
+    if "DATABRICKS_RUNTIME_VERSION" in os.environ:
+        return "databricks"
+    elif os.environ.get("DATAPROC_CLUSTER"):
+        return "gcp"
+    else:
+        return "local"
 
 
 # ── GCP configuration ───────────────────────────────────────
@@ -68,12 +83,12 @@ def get_data_path(layer: str = "raw", mode: str = "local") -> str:
 
     Args:
         layer: Data layer - "raw", "processed", or "analytics"
-        mode: "local" or "gcp"
+        mode: "local", "gcp", or "databricks"
 
     Returns:
         Local file path or gs:// URI
     """
-    if mode == "gcp":
+    if mode in ("gcp", "databricks"):
         bucket = get_gcs_bucket()
         return f"gs://{bucket}/data/{layer}"
     else:
@@ -91,13 +106,15 @@ def get_spark_session(
 
     Args:
         app_name: Name of the Spark application
-        mode: "local" (default) or "gcp"
+        mode: "local", "gcp", or "databricks"
         enable_delta: Whether to enable Delta Lake support
 
     Returns:
         Configured SparkSession
     """
-    if mode == "gcp":
+    if mode == "databricks":
+        return _build_databricks_session(app_name)
+    elif mode == "gcp":
         return _build_gcp_session(app_name, enable_delta)
     else:
         return _build_local_session(app_name, enable_delta)
@@ -124,6 +141,19 @@ def _build_local_session(app_name: str, enable_delta: bool) -> SparkSession:
             .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
 
     return builder.getOrCreate()
+
+
+def _build_databricks_session(app_name: str) -> SparkSession:
+    """
+    Build SparkSession for Databricks (serverless or cluster).
+
+    On Databricks, a SparkSession is pre-created and fully managed.
+    We just get the existing session — no need to set master, memory,
+    or Delta config (all handled by the runtime).
+    """
+    return SparkSession.builder \
+        .appName(app_name) \
+        .getOrCreate()
 
 
 def _build_gcp_session(app_name: str, enable_delta: bool) -> SparkSession:
@@ -171,16 +201,12 @@ SPARK_CONFIG_GUIDE = """
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                              ║
 ║  MODES:                                                                      ║
-║  • local  → Uses local[*], data from local filesystem (default)             ║
-║  • gcp    → Uses YARN on Dataproc, data from GCS                            ║
+║  • local      → Uses local[*], data from local filesystem (default)         ║
+║  • gcp        → Uses YARN on Dataproc, data from GCS                        ║
+║  • databricks → Uses Databricks serverless, data from GCS                   ║
 ║                                                                              ║
-║  spark.driver.memory         Memory for the driver (your local machine)     ║
-║  spark.executor.memory       Memory per executor (local = same as driver)   ║
-║  spark.sql.shuffle.partitions  Number of partitions after shuffle           ║
-║                               Default 200 is too high for local dev         ║
-║  spark.sql.adaptive.enabled  Enable Adaptive Query Execution (AQE)          ║
-║                               Auto-optimizes shuffle partitions             ║
-║  spark.serializer            Kryo is faster than default Java serializer    ║
+║  AUTO-DETECT:                                                                ║
+║  • detect_mode() auto-selects the right mode based on environment           ║
 ║                                                                              ║
 ║  LOCAL TIPS:                                                                 ║
 ║  • Use local[*] to use all CPU cores                                        ║
@@ -194,6 +220,11 @@ SPARK_CONFIG_GUIDE = """
 ║  • Use ./gcp/teardown_gcp.sh when done to save costs                        ║
 ║  • Cluster auto-deletes after 30min idle (configurable in .env)             ║
 ║                                                                              ║
+║  DATABRICKS TIPS:                                                            ║
+║  • SparkSession is pre-created — just use getOrCreate()                     ║
+║  • Delta Lake is built-in — no extra config needed                          ║
+║  • Use Unity Catalog External Location for GCS access                       ║
+║                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -201,6 +232,7 @@ if __name__ == "__main__":
     print(SPARK_CONFIG_GUIDE)
 
     # Test local configuration
+    print(f"  Detected mode: {detect_mode()}")
     spark = get_spark_session("ConfigTest")
     print(f"\n✅ Spark {spark.version} initialized successfully! (local mode)")
     print(f"📁 Project Root: {PROJECT_ROOT}")

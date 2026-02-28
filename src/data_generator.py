@@ -34,8 +34,11 @@ except ImportError:
 
 random.seed(42)
 
-# Project paths
-PROJECT_ROOT = Path.cwd().parent
+# Project paths — __file__ works locally; on Databricks, cwd is the repo root
+try:
+    PROJECT_ROOT = Path(__file__).parent.parent
+except NameError:
+    PROJECT_ROOT = Path.cwd()
 DATA_RAW = PROJECT_ROOT / "data" / "raw"
 
 # Constants
