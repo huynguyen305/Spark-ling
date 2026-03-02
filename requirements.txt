@@ -31,3 +31,7 @@ pyarrow>=12.0.0
 # pip install -r requirements.txt  ← installs these too
 google-cloud-storage>=2.10.0
 gcsfs>=2023.6.0
+
+# AWS (optional - install for S3 storage)
+boto3>=1.28.0
+s3fs>=2023.6.0

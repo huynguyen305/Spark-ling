@@ -17,14 +17,14 @@ A hands-on Spark project simulating **banking data analytics** scenarios. Build 
 
 ### 🏦 Aligned with Techcombank JD
 
-| JD Requirement | Module Coverage |
-|----------------|----------------|
-| **Data Architecture** - Build infrastructure, evaluate architectures | Module 10: Medallion Architecture, Data Products |
-| **Data Integration** - Multi-source ETL, reusable ML assets | Module 10: Feature Store, Multi-source Integration |
-| **Real-time Analytics** - Critical decision making | Module 11: Streaming, Transaction Monitoring |
-| **Optimized Pipelines** - ETL for analysis | Modules 04-05: Quality Framework, SCD Type 2 |
-| **Performance** - Handle concurrent workloads | Module 09: Fair Scheduler, Dynamic Allocation |
-| **Cloud Migration** - AWS integration | Module 08: Delta Lake, DBX→AWS patterns |
+| JD Requirement                                                       | Module Coverage                                    |
+| -------------------------------------------------------------------- | -------------------------------------------------- |
+| **Data Architecture** - Build infrastructure, evaluate architectures | Module 10: Medallion Architecture, Data Products   |
+| **Data Integration** - Multi-source ETL, reusable ML assets          | Module 10: Feature Store, Multi-source Integration |
+| **Real-time Analytics** - Critical decision making                   | Module 11: Streaming, Transaction Monitoring       |
+| **Optimized Pipelines** - ETL for analysis                           | Modules 04-05: Quality Framework, SCD Type 2       |
+| **Performance** - Handle concurrent workloads                        | Module 09: Fair Scheduler, Dynamic Allocation      |
+| **Cloud Migration** - AWS integration                                | Module 08: Delta Lake, DBX→AWS patterns            |
 
 ---
 
@@ -80,15 +80,7 @@ Spark-ling/
 │   └── analytics/               # Final analytics output
 │
 ├── notebooks/                   # Learning modules (start here!)
-│   ├── 01_spark_basics.ipynb
-│   ├── 02_banking_transformations.ipynb
-│   ├── 03_window_functions.ipynb
-│   ├── 04_data_quality.ipynb
-│   ├── 05_scd_implementation.ipynb
-│   ├── 06_performance_tuning.ipynb
-│   ├── 07_data_modeling_advanced.ipynb    # ⭐ Senior DE
-│   ├── 08_delta_lake_aws_migration.ipynb  # ⭐ DBX→AWS
-│   └── 09_concurrency_optimization.ipynb  # ⭐ No more Synapse queueing!
+│   ├── 01_spark_basics.ipynb ... 11_streaming_realtime_analytics.ipynb
 │
 ├── src/                         # Reusable code modules
 │   ├── data_generator.py
@@ -100,8 +92,27 @@ Spark-ling/
 │   ├── daily_transactions.py
 │   └── customer_dim_scd.py
 │
-└── configs/
-    └── spark_config.py
+├── configs/
+│   └── spark_config.py          # Multi-mode: local/gcp/aws/databricks
+│
+├── aws/                         # ☁️ AWS infrastructure scripts
+│   ├── setup_s3.sh, sync_data.sh, submit_emr_job.sh, teardown.sh
+│   └── .env.example
+│
+├── gcp/                         # GCP infrastructure scripts
+│   ├── setup_gcp.sh, sync_data.sh, submit_job.sh, teardown_gcp.sh
+│   └── .env.example
+│
+├── mcp/                         # 🔌 MCP server for AI data exploration
+│   ├── server.py, config.py
+│   ├── databricks_backend.py, s3_backend.py
+│   ├── .env.example
+│   └── requirements.txt
+│
+└── docs/
+    ├── AWS_SETUP.md, GCP_SETUP.md
+    ├── INTEGRATION_GUIDE.md
+    └── MCP_GUIDE.md
 ```
 
 ---
@@ -110,31 +121,31 @@ Spark-ling/
 
 ### 📅 Suggested Timeline (4-8 hrs/week from February)
 
-| Week | Focus | Hours | Modules |
-|------|-------|-------|---------|
-| **Jan 23-29** | Setup & Quick Review | 2-3h | Install, generate data, skim 01-02 |
-| **Feb 3-9** | Window Functions + Quality | 4h | 03, 04 |
-| **Feb 10-16** | SCD + Data Modeling ⭐ | 6h | 05, 07 |
-| **Feb 17-23** | Performance + Concurrency ⭐ | 6h | 06, 09 |
-| **Feb 24-Mar 2** | Delta Lake + AWS ⭐ | 6h | 08 |
-| **Mar 3-8** | **Data Arch + Streaming** ⭐ | 8h | **10, 11** + run pipelines |
+| Week             | Focus                       | Hours | Modules                            |
+| ---------------- | --------------------------- | ----- | ---------------------------------- |
+| **Jan 23-29**    | Setup & Quick Review        | 2-3h  | Install, generate data, skim 01-02 |
+| **Feb 3-9**      | Window Functions + Quality  | 4h    | 03, 04                             |
+| **Feb 10-16**    | SCD + Data Modeling ⭐       | 6h    | 05, 07                             |
+| **Feb 17-23**    | Performance + Concurrency ⭐ | 6h    | 06, 09                             |
+| **Feb 24-Mar 2** | Delta Lake + AWS ⭐          | 6h    | 08                                 |
+| **Mar 3-8**      | **Data Arch + Streaming** ⭐ | 8h    | **10, 11** + run pipelines         |
 
 **Total: ~32-37 hours over 6 weeks**
 
 ### Module Overview (11 Modules)
 
-| Module | Level | Focus |
-|--------|-------|-------|
-| 01-02 | Review | Basics (skim if comfortable) |
-| 03 | Core | Window functions - running totals, rankings |
-| 04 | Core | Data quality framework |
-| 05 | Core | SCD Type 2 implementation |
-| 06 | Core | Broadcast joins, caching, Spark UI |
-| **07** | ⭐ Senior | Star Schema, Business KPIs, Data Vault |
-| **08** | ⭐ Senior | Delta Lake, Databricks → AWS migration |
+| Module | Level    | Focus                                           |
+| ------ | -------- | ----------------------------------------------- |
+| 01-02  | Review   | Basics (skim if comfortable)                    |
+| 03     | Core     | Window functions - running totals, rankings     |
+| 04     | Core     | Data quality framework                          |
+| 05     | Core     | SCD Type 2 implementation                       |
+| 06     | Core     | Broadcast joins, caching, Spark UI              |
+| **07** | ⭐ Senior | Star Schema, Business KPIs, Data Vault          |
+| **08** | ⭐ Senior | Delta Lake, Databricks → AWS migration          |
 | **09** | ⭐ Senior | Concurrency optimization (no Synapse queueing!) |
-| **10** | ⭐ JD | Medallion Architecture, ML Feature Assets |
-| **11** | ⭐ JD | Streaming & Real-time Transaction Monitoring |
+| **10** | ⭐ JD     | Medallion Architecture, ML Feature Assets       |
+| **11** | ⭐ JD     | Streaming & Real-time Transaction Monitoring    |
 
 > **Senior DE Path**: Start at Module 3, prioritize 07-11 for Techcombank JD alignment.
 
@@ -165,6 +176,51 @@ spark.sql("""
 
 ---
 
+## ☁️ AWS S3 Integration
+
+```bash
+cp aws/.env.example aws/.env   # fill in your values
+./aws/setup_s3.sh              # create S3 bucket
+python src/data_generator.py   # generate data
+./aws/sync_data.sh upload      # upload to S3
+```
+
+```python
+from configs.spark_config import get_spark_session, get_data_path
+spark = get_spark_session("MyApp", mode="aws")
+raw = get_data_path("raw", mode="aws")  # s3a://bucket/data/raw
+```
+
+See [docs/AWS_SETUP.md](docs/AWS_SETUP.md) for full guide.
+
+---
+
+## 🔌 MCP: AI-Assisted Data Exploration
+
+```bash
+pip install -r mcp/requirements.txt
+cp mcp/.env.example mcp/.env   # fill in credentials
+```
+
+Add to IDE MCP config:
+```json
+{
+  "mcpServers": {
+    "sparkling-data": {
+      "command": "python",
+      "args": ["-m", "mcp.server"],
+      "cwd": "/path/to/Spark-ling"
+    }
+  }
+}
+```
+
+Then ask your AI: *"What's the customer segment distribution?"*
+
+See [docs/MCP_GUIDE.md](docs/MCP_GUIDE.md) for full guide.
+
+---
+
 ## ✅ Success Criteria
 
 By March 9, you should be able to:
@@ -178,7 +234,7 @@ By March 9, you should be able to:
 - [ ] Optimize Spark jobs using broadcast joins, caching
 - [ ] Debug using Spark UI (stages, tasks, shuffle)
 
-### Senior DE Skills (Data Modeling & Business Focus) ⭐
+### Senior DE Skills (Data Modeling & Business Focus)
 - [ ] Design Star Schema (Fact & Dimension tables) in Spark
 - [ ] Build business KPI metrics (CLV, MAU, Channel Mix)
 - [ ] Implement aggregate fact tables (periodic snapshots)
@@ -186,11 +242,10 @@ By March 9, you should be able to:
 - [ ] Write production-grade pipelines with quality gates
 - [ ] Implement incremental load patterns
 
-### Migration & Concurrency Skills (AWS Focus) 🚀
+### Migration & Concurrency Skills (AWS Focus)
 - [ ] Use Delta Lake (MERGE, TIME TRAVEL, OPTIMIZE)
-- [ ] Understand Databricks → AWS EMR/Glue migration patterns
+- [ ] Understand Databricks to AWS EMR/Glue migration patterns
 - [ ] Configure Fair Scheduler for concurrent queries
-- [ ] Avoid Synapse-style queueing with scheduler pools
 - [ ] Implement Dynamic Resource Allocation
 
 ---

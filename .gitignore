@@ -41,3 +41,12 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Environment files (secrets)
+aws/.env
+mcp/.env
+gcp/.env
+.secrets
+
+# ignore zip files
+*.zip

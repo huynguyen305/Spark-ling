@@ -1,20 +1,21 @@
 """
-Spark Configuration for Local, GCP & Databricks Development
-==============================================================
-Supports three modes:
+Spark Configuration for Local, GCP, AWS & Databricks Development
+=================================================================
+Supports four modes:
   - "local"       → Runs on your machine with local[*] (default)
   - "gcp"         → Runs on GCP Dataproc with GCS data paths
-  - "databricks"  → Runs on Databricks serverless, data on GCS
+  - "aws"         → Runs on AWS EMR with S3 data paths
+  - "databricks"  → Runs on Databricks serverless, data on S3
 
 Usage:
     # Auto-detect environment (recommended)
     from configs.spark_config import get_spark_session, get_data_path, detect_mode
-    mode = detect_mode()  # "local", "gcp", or "databricks"
+    mode = detect_mode()  # "local", "gcp", "aws", or "databricks"
     spark = get_spark_session("MyApp", mode=mode)
     raw = get_data_path("raw", mode=mode)
 
     # Or explicitly set mode
-    spark = get_spark_session("MyApp", mode="databricks")
+    spark = get_spark_session("MyApp", mode="aws")
 """
 
 import os
@@ -41,12 +42,14 @@ def detect_mode() -> str:
     Auto-detect which execution environment we're running in.
 
     Returns:
-        "databricks", "gcp", or "local"
+        "databricks", "gcp", "aws", or "local"
     """
     if "DATABRICKS_RUNTIME_VERSION" in os.environ:
         return "databricks"
     elif os.environ.get("DATAPROC_CLUSTER"):
         return "gcp"
+    elif os.environ.get("AWS_EXECUTION_ENV") or os.environ.get("EMR_CLUSTER_ID"):
+        return "aws"
     else:
         return "local"
 
@@ -77,18 +80,51 @@ def get_gcs_bucket() -> str:
     return bucket
 
 
+# ── AWS configuration ───────────────────────────────────────
+def _load_aws_config() -> dict:
+    """Load AWS config from aws/.env file if it exists."""
+    env_file = PROJECT_ROOT / "aws" / ".env"
+    config = {}
+    if env_file.exists():
+        with open(env_file) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
+                    config[key.strip()] = value.strip()
+    return config
+
+
+def get_s3_bucket() -> str:
+    """Get the S3 bucket name from config or environment."""
+    bucket = os.environ.get("SPARKLING_S3_BUCKET", "")
+    if not bucket:
+        config = _load_aws_config()
+        bucket = config.get("S3_BUCKET", "")
+    if not bucket:
+        raise ValueError(
+            "S3_BUCKET not set. Copy aws/.env.example to aws/.env and fill in your values, "
+            "or set the SPARKLING_S3_BUCKET environment variable."
+        )
+    return bucket
+
+
 def get_data_path(layer: str = "raw", mode: str = "local") -> str:
     """
     Get the data path for a given layer, based on execution mode.
 
     Args:
         layer: Data layer - "raw", "processed", or "analytics"
-        mode: "local", "gcp", or "databricks"
+        mode: "local", "gcp", "aws", or "databricks"
 
     Returns:
-        Local file path or gs:// URI
+        Local file path, gs:// URI, or s3a:// URI
     """
-    if mode in ("gcp", "databricks"):
+    if mode in ("aws", "databricks"):
+        # S3 is the primary cloud storage for both AWS and Databricks
+        bucket = get_s3_bucket()
+        return f"s3a://{bucket}/data/{layer}"
+    elif mode == "gcp":
         bucket = get_gcs_bucket()
         return f"gs://{bucket}/data/{layer}"
     else:
@@ -106,7 +142,7 @@ def get_spark_session(
 
     Args:
         app_name: Name of the Spark application
-        mode: "local", "gcp", or "databricks"
+        mode: "local", "gcp", "aws", or "databricks"
         enable_delta: Whether to enable Delta Lake support
 
     Returns:
@@ -116,6 +152,8 @@ def get_spark_session(
         return _build_databricks_session(app_name)
     elif mode == "gcp":
         return _build_gcp_session(app_name, enable_delta)
+    elif mode == "aws":
+        return _build_aws_session(app_name, enable_delta)
     else:
         return _build_local_session(app_name, enable_delta)
 
@@ -181,6 +219,45 @@ def _build_gcp_session(app_name: str, enable_delta: bool) -> SparkSession:
     return builder.getOrCreate()
 
 
+def _build_aws_session(app_name: str, enable_delta: bool) -> SparkSession:
+    """
+    Build SparkSession for AWS EMR or local with S3 access.
+
+    On EMR, the cluster has Spark + Hadoop-AWS pre-installed.
+    For local development, the hadoop-aws JAR is added via packages.
+    """
+    builder = SparkSession.builder \
+        .appName(app_name) \
+        .config("spark.sql.adaptive.enabled", "true") \
+        .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
+        .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+
+    # S3A configuration — needed for local dev; on EMR these are pre-set
+    if not os.environ.get("EMR_CLUSTER_ID"):
+        builder = builder \
+            .config("spark.master", "local[*]") \
+            .config("spark.driver.memory", "4g") \
+            .config("spark.jars.packages",
+                    "org.apache.hadoop:hadoop-aws:3.3.4,"
+                    "com.amazonaws:aws-java-sdk-bundle:1.12.262" +
+                    (",io.delta:delta-core_2.12:2.4.0" if enable_delta else "")) \
+            .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
+            .config("spark.hadoop.fs.s3a.aws.credentials.provider",
+                    "com.amazonaws.auth.DefaultAWSCredentialsProviderChain")
+    else:
+        # On EMR, just set Delta if needed
+        if enable_delta:
+            builder = builder \
+                .config("spark.jars.packages", "io.delta:delta-core_2.12:2.4.0")
+
+    if enable_delta:
+        builder = builder \
+            .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
+            .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+
+    return builder.getOrCreate()
+
+
 def get_spark_session_minimal(app_name: str = "Spark-ling-Minimal") -> SparkSession:
     """
     Lightweight SparkSession for quick experiments.
@@ -203,10 +280,12 @@ SPARK_CONFIG_GUIDE = """
 ║  MODES:                                                                      ║
 ║  • local      → Uses local[*], data from local filesystem (default)         ║
 ║  • gcp        → Uses YARN on Dataproc, data from GCS                        ║
-║  • databricks → Uses Databricks serverless, data from GCS                   ║
+║  • aws        → Uses YARN on EMR, data from S3 (s3a://)                     ║
+║  • databricks → Uses Databricks serverless, data from S3                    ║
 ║                                                                              ║
-║  AUTO-DETECT:                                                                ║
-║  • detect_mode() auto-selects the right mode based on environment           ║
+║  STORAGE:                                                                    ║
+║  • AWS S3 is the primary cloud storage for all modes                         ║
+║  • Configure via aws/.env or SPARKLING_S3_BUCKET env var                     ║
 ║                                                                              ║
 ║  LOCAL TIPS:                                                                 ║
 ║  • Use local[*] to use all CPU cores                                        ║
@@ -214,16 +293,16 @@ SPARK_CONFIG_GUIDE = """
 ║  • Reduce shuffle.partitions to 4-8 for small data                         ║
 ║  • Monitor at http://localhost:4040 when Spark is running                   ║
 ║                                                                              ║
-║  GCP TIPS:                                                                   ║
-║  • Use ./gcp/setup_gcp.sh to create the cluster                            ║
-║  • Use ./gcp/submit_job.sh to submit jobs                                   ║
-║  • Use ./gcp/teardown_gcp.sh when done to save costs                        ║
-║  • Cluster auto-deletes after 30min idle (configurable in .env)             ║
+║  AWS TIPS:                                                                   ║
+║  • Use ./aws/setup_s3.sh to create the S3 bucket                            ║
+║  • Use ./aws/sync_data.sh to upload/download data to S3                     ║
+║  • Use ./aws/submit_emr_job.sh to submit jobs to EMR                        ║
+║  • Configure credentials via aws configure or IAM roles                     ║
 ║                                                                              ║
 ║  DATABRICKS TIPS:                                                            ║
 ║  • SparkSession is pre-created — just use getOrCreate()                     ║
 ║  • Delta Lake is built-in — no extra config needed                          ║
-║  • Use Unity Catalog External Location for GCS access                       ║
+║  • Data reads from S3 via Unity Catalog External Location                   ║
 ║                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """

@@ -1,0 +1,17 @@
+# MCP Server Dependencies for Spark-ling
+# Install with: pip install -r mcp/requirements.txt
+
+# MCP SDK
+mcp[cli]>=1.0.0
+
+# Databricks backend
+databricks-sql-connector>=3.0.0
+databricks-sdk>=0.20.0
+
+# S3 / local backend
+boto3>=1.28.0
+pyspark>=3.4.1
+pyarrow>=12.0.0
+
+# Utilities
+python-dotenv>=1.0.0
