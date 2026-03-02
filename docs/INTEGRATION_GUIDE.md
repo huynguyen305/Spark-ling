@@ -1,6 +1,6 @@
-# 🔗 Integration Guide: GCP + Databricks Serverless + Antigravity
+# 🔗 Integration Guide: Local IDE + Databricks + AWS S3
 
-How to link GCP infrastructure, Databricks serverless, and Antigravity IDE for the Spark-ling project.
+End-to-end architecture for the Spark-ling project: edit locally, run on Databricks serverless, store in S3.
 
 ---
 
@@ -8,295 +8,225 @@ How to link GCP infrastructure, Databricks serverless, and Antigravity IDE for t
 
 ```mermaid
 graph TB
-    subgraph LOCAL["💻 Antigravity IDE (Local)"]
-        AG[Code Editor]
-        GIT[Git Repo: Spark-ling]
-        CLI[gcloud CLI]
+    subgraph LOCAL["💻 Local Machine (WSL Ubuntu 24.04)"]
+        IDE["VS Code"]
+        NB["Jupyter Notebooks\n.ipynb files"]
+        VENV[".venv\ndatabricks-connect 17.3\nipykernel"]
+        CFG["~/.databrickscfg\nhost + token"]
+        AWSCFG["~/.aws/credentials\nAWS CLI"]
+        SCRIPTS["aws/ scripts\nsetup_s3.sh, sync_data.sh"]
     end
 
-    subgraph DBX["☁️ Databricks Serverless"]
-        DBX_GIT[Git Folder: Spark-ling]
-        DBX_NOTEBOOK[Notebooks / Scripts]
-        SERVERLESS[Serverless Compute]
+    subgraph AWS["☁️ Amazon Web Services (ap-southeast-1)"]
+        S3["S3 Bucket\nsparkling-data-test\nParquet data"]
+        IAM["IAM Role\nsparkling-databricks-role"]
+    end
+
+    subgraph DBX["☁️ Databricks (dbc-cdbdfd07-5797)"]
+        SERVERLESS["Serverless Compute\nSpark 4.1.0"]
         UC["Unity Catalog"]
-        STORAGECRED["Storage Credential (SA Key)"]
-        EXTLOC["External Location (gs://bucket)"]
+        CRED["Storage Credential\nIAM Role → S3"]
+        EXTLOC["External Location\ns3://sparkling-data-test/"]
+        GENSCRIPT["scripts/generate_to_s3.py\n(data generation)"]
     end
 
-    subgraph GCP["🌐 Google Cloud Platform"]
-        GCS["GCS Bucket (gs://sparkling-data)"]
-        SA[Service Account]
-        DATAPROC[Dataproc Cluster]
+    subgraph MCP["🔌 MCP Server (optional)"]
+        MCPSERVER["mcp/server.py\n(FastMCP + stdio/SSE)"]
+        MCPDBX["databricks_backend.py"]
+        MCPS3["s3_backend.py"]
     end
 
-    AG -->|"edit & push"| GIT
-    GIT -->|"git push/pull"| DBX_GIT
-    DBX_GIT -->|"runs on"| SERVERLESS
-    UC --> STORAGECRED
-    STORAGECRED -->|"uses"| SA
+    IDE --> NB
+    NB --> VENV
+    VENV -->|"gRPC\nDatabricks Connect"| SERVERLESS
+    CFG -->|"auth"| SERVERLESS
+    AWSCFG --> SCRIPTS
+    SCRIPTS -->|"aws s3 sync"| S3
+    IAM -->|"grants access"| S3
+    UC --> CRED
+    CRED -->|"AssumeRole"| IAM
     UC --> EXTLOC
-    EXTLOC -->|"points to"| GCS
-    SERVERLESS -->|"reads/writes via External Location"| GCS
-    CLI -->|"sync_data.sh"| GCS
-    CLI -->|"submit_job.sh"| DATAPROC
-    DATAPROC -->|"reads/writes"| GCS
+    EXTLOC -->|"maps to"| S3
+    SERVERLESS -->|"s3a://"| S3
+    GENSCRIPT -->|"write Parquet"| S3
+    IDE --> MCPSERVER
+    MCPSERVER --> MCPDBX
+    MCPSERVER --> MCPS3
+    MCPDBX -->|"SQL"| SERVERLESS
+    MCPS3 -->|"s3a://"| S3
 ```
 
 ---
 
-## How to Identify Your Databricks Cloud Provider
+## Environment Summary
 
-Your Databricks workspace URL tells you which cloud it runs on:
-
-| URL Pattern | Cloud |
-|-------------|-------|
-| `https://<id>.cloud.databricks.com` | **AWS** |
-| `https://adb-<id>.azuredatabricks.net` | **Azure** |
-| `https://<id>.<num>.gcp.databricks.com` | **GCP** |
-
-> [!TIP]
-> If your workspace URL contains `.gcp.databricks.com`, you're already on GCP — connecting to GCS is simplest. If you're on AWS/Azure, you'll use a cross-cloud service account key.
-
----
-
-## Connecting Databricks Serverless to GCS
-
-### The Goal
-
-Save data generated in Databricks serverless directly to your GCS bucket (`gs://sparkling-data-*`), so all three environments share one data layer.
-
-### Method: Unity Catalog External Location (Recommended)
-
-This is the modern, secure way to connect Databricks to GCS — no legacy mounts required.
-
-```mermaid
-graph LR
-    A["Databricks Notebook"] --> B["Unity Catalog"]
-    B --> C["External Location"]
-    C --> D["Storage Credential"]
-    D --> E["GCP Service Account"]
-    E --> F["gs://sparkling-data-bucket"]
-```
+| Component | Details |
+|-----------|---------|
+| **OS** | WSL Ubuntu 24.04 |
+| **Python** | 3.12 (via `.venv`) |
+| **Local engine** | Databricks Connect 17.3.6 (remote → DBR 4.1.0) |
+| **Databricks host** | `https://dbc-cdbdfd07-5797.cloud.databricks.com` |
+| **Storage** | `s3://sparkling-data-test` (ap-southeast-1) |
+| **AWS Account** | `085587597183` |
+| **IAM Role** | `sparkling-databricks-role` |
+| **MCP transport** | `stdio` (local) / `sse` (EC2) |
 
 ---
 
-### Step 1: Create a GCP Service Account Key
-
-Run this from your **Antigravity terminal**:
+## Quick Reference: Daily Commands
 
 ```bash
-# If you already ran setup_gcp.sh, the service account exists.
-# Just create a key for Databricks:
+# Navigate to project
+cd ~/sparking_repo/Spark-ling
 
-SA_EMAIL="sparkling-sa@YOUR_PROJECT_ID.iam.gserviceaccount.com"
+# Activate virtual environment (every new terminal)
+source .venv/bin/activate
 
-gcloud iam service-accounts keys create ~/sparkling-dbx-key.json \
-  --iam-account="$SA_EMAIL"
+# Check Databricks connection
+python -c "
+from databricks.connect import DatabricksSession
+spark = DatabricksSession.builder.serverless().getOrCreate()
+print(f'✅ Spark {spark.version}')
+spark.stop()
+"
 
-# Verify the key was created
-cat ~/sparkling-dbx-key.json | head -5
-```
+# S3 data operations
+./aws/sync_data.sh status     # what's in S3
+./aws/sync_data.sh upload     # local → S3
+./aws/sync_data.sh download   # S3 → local
 
-> [!CAUTION]
-> This key grants write access to your GCS bucket. Never commit it to Git. Delete it after uploading to Databricks secrets.
-
----
-
-### Step 2: Create a Databricks Storage Credential
-
-**In the Databricks UI:**
-
-1. Go to **Catalog** → **External Data** → **Credentials** → **Create Credential**
-2. Choose **Storage Credential**
-3. Set:
-   - **Name**: `gcs-sparkling-sa`
-   - **Credential Type**: `GCP Service Account`
-   - For **GCP Databricks**: paste the service account email (`sparkling-sa@YOUR_PROJECT.iam.gserviceaccount.com`)
-   - For **AWS/Azure Databricks**: upload the JSON key file content from `~/sparkling-dbx-key.json`
-4. Click **Create**
-
-**Or via SQL in a Databricks notebook:**
-
-```sql
--- For GCP-hosted Databricks (easiest):
-CREATE STORAGE CREDENTIAL gcs_sparkling_sa
-COMMENT 'Service account for Spark-ling GCS bucket';
--- Then grant storage admin role to the credential's SA email in GCP Console
-
--- For AWS/Azure-hosted Databricks (uses JSON key):
--- Use the UI method above, as SQL doesn't support pasting JSON keys directly
+# Re-generate data (on Databricks)
+# Open Databricks notebook → %run /Repos/.../scripts/generate_to_s3
 ```
 
 ---
 
-### Step 3: Create an External Location
+## How the Components Connect
 
-This tells Databricks "this GCS path is allowed for read/write":
+### 1. Local IDE → Databricks (Databricks Connect)
 
-**In Databricks UI:**
+Databricks Connect routes PySpark API calls over gRPC to Databricks serverless. Your local Python process becomes the "driver" in terms of code control, while Spark execution happens in the cloud.
 
-1. Go to **Catalog** → **External Data** → **External Locations** → **Create Location**
-2. Set:
-   - **Name**: `sparkling_gcs`
-   - **URL**: `gs://YOUR-BUCKET-NAME/` (e.g., `gs://sparkling-data-your-project-id/`)
-   - **Storage Credential**: `gcs-sparkling-sa`
-3. Click **Create**
-4. Use **Test Connection** to verify ✅
+**Config files involved:**
+- `~/.databrickscfg` — contains `host` and `token`
+- `.venv/` — contains `databricks-connect==17.3.*`
 
-**Or via SQL:**
-
-```sql
-CREATE EXTERNAL LOCATION sparkling_gcs
-  URL 'gs://sparkling-data-your-project-id/'
-  WITH (STORAGE CREDENTIAL gcs_sparkling_sa)
-  COMMENT 'Spark-ling data on GCS';
+**Session creation:**
+```python
+from databricks.connect import DatabricksSession
+spark = DatabricksSession.builder.serverless().getOrCreate()
 ```
 
----
+### 2. Databricks → S3 (External Location)
 
-### Step 4: Save Data from Databricks to GCS
-
-Now you can read/write directly to GCS from any Databricks serverless notebook:
+Databricks Serverless accesses S3 via Unity Catalog's External Location mechanism:
+- **Storage Credential** → IAM Role `sparkling-databricks-role` with trust policy for Databricks AWS account `414351767093`
+- **External Location** → maps `s3://sparkling-data-test/` to the storage credential
 
 ```python
-# ── Write generated data to GCS ─────────────────────────────
-GCS_PATH = "gs://sparkling-data-your-project-id/data"
-
-# Save DataFrames to GCS
-customers_df.write.mode("overwrite").csv(f"{GCS_PATH}/raw/customers.csv", header=True)
-accounts_df.write.mode("overwrite").csv(f"{GCS_PATH}/raw/accounts.csv", header=True)
-transactions_df.write.mode("overwrite").csv(f"{GCS_PATH}/raw/transactions.csv", header=True)
-branches_df.write.mode("overwrite").csv(f"{GCS_PATH}/raw/branches.csv", header=True)
-
-# Or write as Parquet (recommended for Spark — faster & smaller)
-customers_df.write.mode("overwrite").parquet(f"{GCS_PATH}/raw/customers_parquet")
-
-# ── Read back from GCS ──────────────────────────────────────
-df = spark.read.csv(f"{GCS_PATH}/raw/customers.csv", header=True, inferSchema=True)
-df.show(5)
+# In any notebook via Databricks Connect
+df = spark.read.parquet("s3a://sparkling-data-test/data/raw/customers")
 ```
 
-> [!NOTE]
-> Since `data_generator.py` currently writes to local CSV files, you need to either:
->
-> - **Option A**: Run the generator locally → upload via `sync_data.sh` → read from GCS in Databricks
-> - **Option B**: Convert the generated data to Spark DataFrames in Databricks and write to GCS directly (see updated `data_generator.py` below)
+### 3. Local → S3 (AWS CLI)
 
----
-
-### Step 5: Create an External Table (Optional — Best Practice)
-
-Register your GCS data in Unity Catalog so it's queryable by name:
-
-```sql
--- Create a catalog and schema for your project
-CREATE CATALOG IF NOT EXISTS sparkling;
-CREATE SCHEMA IF NOT EXISTS sparkling.banking;
-
--- Register external tables pointing to GCS
-CREATE TABLE IF NOT EXISTS sparkling.banking.customers
-USING CSV
-OPTIONS (header = 'true', inferSchema = 'true')
-LOCATION 'gs://sparkling-data-your-project-id/data/raw/customers.csv';
-
-CREATE TABLE IF NOT EXISTS sparkling.banking.transactions
-USING CSV
-OPTIONS (header = 'true', inferSchema = 'true')
-LOCATION 'gs://sparkling-data-your-project-id/data/raw/transactions.csv';
-
--- Now query by name from ANY notebook
-SELECT segment, COUNT(*) as cnt
-FROM sparkling.banking.customers
-GROUP BY segment;
-```
-
----
-
-## Code Changes Made
-
-### `data_generator.py` — Fixed `__file__` for Databricks
-
-The `__file__` variable is not defined in Databricks notebooks/interactive environments. Updated to auto-detect:
-
-```diff
--PROJECT_ROOT = Path(__file__).parent.parent
-+PROJECT_ROOT = Path(__file__).parent.parent if '__file__' in dir() else Path.cwd()
-```
-
-### `spark_config.py` — Added Databricks Mode + Auto-Detection
-
-Added `detect_mode()` and a `databricks` mode so code runs everywhere without changes:
-
-```python
-# Auto-detect environment — no need to pass mode manually
-mode = detect_mode()  # → "databricks", "gcp", or "local"
-spark = get_spark_session("MyApp", mode=mode)
-data_path = get_data_path("raw", mode=mode)
-```
-
----
-
-## Day-to-Day Workflow
-
-```mermaid
-sequenceDiagram
-    participant AG as Antigravity IDE
-    participant GH as GitHub
-    participant DBX as Databricks Serverless
-    participant GCS as GCS Bucket
-
-    Note over AG: 1. Write/edit code
-    AG->>GH: git push
-    GH->>DBX: Pull in Repos
-    Note over DBX: 2. Run data_generator.py
-    DBX->>GCS: Write data via External Location
-    Note over DBX: 3. Run notebooks
-    DBX->>GCS: Read/write via gs:// paths
-    Note over AG: 4. Download results if needed
-    AG->>GCS: ./gcp/sync_data.sh download
-```
-
-| Task | Where |
-|------|-------|
-| Edit Python/SQL code | **Antigravity** |
-| Run notebooks interactively | **Databricks Serverless** |
-| Generate synthetic data | **Databricks** or **Antigravity** (local) |
-| Persistent data storage | **GCS** (shared across all) |
-| Run production batch jobs | **Databricks Jobs** or **Dataproc** |
-| Version control | **Antigravity** → Git |
-
----
-
-## Quick Reference
+For direct file operations (upload/download), the AWS CLI uses `~/.aws/credentials`:
 
 ```bash
-# ── From Antigravity terminal ──
-git add -A && git commit -m "update" && git push   # Push code
-./gcp/sync_data.sh upload                            # Upload local data to GCS
-./gcp/sync_data.sh download                          # Download results from GCS
+aws s3 ls s3://sparkling-data-test/data/raw/
+./aws/sync_data.sh upload
 ```
 
-```python
-# ── In Databricks notebook ──
-# Read from GCS (after External Location is set up)
-df = spark.read.csv("gs://your-bucket/data/raw/transactions.csv", header=True)
+### 4. MCP Server → Data (stdio)
 
-# Use the config helper for portable code
-from configs.spark_config import get_spark_session, get_data_path, detect_mode
-mode = detect_mode()  # returns "databricks"
-spark = get_spark_session("MyApp", mode=mode)
-raw = get_data_path("raw", mode=mode)  # returns "gs://bucket/data/raw"
+The MCP server runs as a subprocess in your IDE. The `command` in `.vscode/mcp.json` must point to the `.venv/bin/python` so all dependencies are available:
+
+```json
+{
+  "servers": {
+    "sparkling-data": {
+      "command": "/home/huynguyenle/sparking_repo/Spark-ling/.venv/bin/python",
+      "args": ["-m", "mcp.server"],
+      "cwd": "/home/huynguyenle/sparking_repo/Spark-ling"
+    }
+  }
+}
 ```
 
 ---
 
-## Troubleshooting
+## Data Flow
 
-| Issue | Solution |
-|-------|----------|
-| `__file__` not defined in Databricks | Already fixed — uses `Path.cwd()` fallback |
-| `PERMISSION_DENIED` on `gs://` path | Check External Location + Storage Credential in Unity Catalog |
-| Can't create Storage Credential | Need `CREATE STORAGE CREDENTIAL` privilege — ask workspace admin |
-| Data not showing in Databricks | Run `sync_data.sh upload` from local, or write directly from Databricks |
-| Code out of sync | Always `git push` from Antigravity → Pull in Databricks Repos |
-| GCS connector not found (AWS/Azure) | Install `gcs-connector` library on cluster or use Databricks secrets approach |
+```
+Generate (Databricks serverless)
+    ↓  scripts/generate_to_s3.py
+    ↓  writes Parquet
+S3: s3://sparkling-data-test/data/raw/
+    ├── branches/ (100 rows)
+    ├── customers/ (10K rows)
+    ├── accounts/ (~15K rows)
+    └── transactions/ (5M rows, 16 partitions)
+    ↓  read via s3a://
+Databricks Connect (local notebooks)
+    ↓  transformations → writing back
+S3: s3://sparkling-data-test/data/processed/
+S3: s3://sparkling-data-test/data/analytics/
+```
+
+---
+
+## Security: Secrets Management
+
+| Secret | Location | Gitignored? |
+|--------|----------|-------------|
+| AWS credentials | `~/.aws/credentials` (via `aws configure`) | N/A (outside repo) |
+| Databricks token | `~/.databrickscfg` | N/A (outside repo) |
+| Project env vars | `aws/.env` | ✅ yes |
+| MCP env vars | `mcp/.env` | ✅ yes |
+| Ad-hoc notes | `.secrets` | ✅ yes |
+
+---
+
+## Troubleshooting Common Integration Issues
+
+### "externally-managed-environment" when using pip
+```bash
+# Always use the venv pip, never system pip
+source .venv/bin/activate
+pip install <package>
+```
+
+### Databricks Connect not finding credentials
+```bash
+# Verify ~/.databrickscfg exists and has correct values
+cat ~/.databrickscfg
+# Should show:
+# [DEFAULT]
+# host  = https://dbc-cdbdfd07-5797.cloud.databricks.com
+# token = dapi...
+```
+
+### S3 "AccessDenied" from Databricks
+```bash
+# Verify External Location in Databricks
+# Catalog → External Locations → sparkling-data-test → Test connection
+# If fails: verify IAM trust policy has the correct External ID
+```
+
+### VS Code kernel not showing `.venv`
+```
+Ctrl+Shift+P → Python: Select Interpreter
+→ Enter interpreter path manually:
+  /home/huynguyenle/sparking_repo/Spark-ling/.venv/bin/python
+```
+
+### MCP server can't connect to Databricks
+```bash
+# Test manually
+source .venv/bin/activate
+python -c "
+import databricks.sdk
+w = databricks.sdk.WorkspaceClient()
+print('Connected to:', w.config.host)
+"
+```
