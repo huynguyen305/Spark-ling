@@ -1,0 +1,31 @@
+Mar 04 07:32:36 ip-172-31-28-106.ap-southeast-1.compute.internal python3.11[27419]: 2026-03-04 07:32:36,583 [sparkling-mcp] INFO: Starting sparkling-data-explorer MCP server (transport=sse)...
+Mar 04 07:32:36 ip-172-31-28-106.ap-southeast-1.compute.internal python3.11[27419]: Traceback (most recent call last):
+Mar 04 07:32:36 ip-172-31-28-106.ap-southeast-1.compute.internal python3.11[27419]:   File "/opt/sparkling-mcp/mcp/server.py", line 250, in <module>
+Mar 04 07:32:36 ip-172-31-28-106.ap-southeast-1.compute.internal python3.11[27419]:     app.run(transport="sse", host="0.0.0.0", port=port)
+Mar 04 07:32:36 ip-172-31-28-106.ap-southeast-1.compute.internal python3.11[27419]: TypeError: FastMCP.run() got an unexpected keyword argument 'host'
+Mar 04 07:32:36 ip-172-31-28-106.ap-southeast-1.compute.internal systemd[1]: sparkling-mcp.service: Main process exited, code=exited, status=1/FAILURE
+Mar 04 07:32:36 ip-172-31-28-106.ap-southeast-1.compute.internal systemd[1]: sparkling-mcp.service: Failed with result 'exit-code'.
+Mar 04 07:32:41 ip-172-31-28-106.ap-southeast-1.compute.internal systemd[1]: sparkling-mcp.service: Scheduled restart job, restart counter is at 4.
+Mar 04 07:32:41 ip-172-31-28-106.ap-southeast-1.compute.internal systemd[1]: Stopped sparkling-mcp.service - Spark-ling MCP Server.
+Mar 04 07:32:41 ip-172-31-28-106.ap-southeast-1.compute.internal systemd[1]: Started sparkling-mcp.service - Spark-ling MCP Server.
+Mar 04 07:32:42 ip-172-31-28-106.ap-southeast-1.compute.internal python3.11[27468]: 2026-03-04 07:32:42,580 [sparkling-mcp] INFO: Starting sparkling-data-explorer MCP server (transport=sse)...
+Mar 04 07:32:42 ip-172-31-28-106.ap-southeast-1.compute.internal python3.11[27468]: Traceback (most recent call last):
+Mar 04 07:32:42 ip-172-31-28-106.ap-southeast-1.compute.internal python3.11[27468]:   File "/opt/sparkling-mcp/mcp/server.py", line 250, in <module>
+Mar 04 07:32:42 ip-172-31-28-106.ap-southeast-1.compute.internal python3.11[27468]:     app.run(transport="sse", host="0.0.0.0", port=port)
+Mar 04 07:32:42 ip-172-31-28-106.ap-southeast-1.compute.internal python3.11[27468]: TypeError: FastMCP.run() got an unexpected keyword argument 'host'
+Mar 04 07:32:42 ip-172-31-28-106.ap-southeast-1.compute.internal systemd[1]: sparkling-mcp.service: Main process exited, code=exited, status=1/FAILURE
+Mar 04 07:32:42 ip-172-31-28-106.ap-southeast-1.compute.internal systemd[1]: sparkling-mcp.service: Failed with result 'exit-code'.
+Mar 04 07:32:47 ip-172-31-28-106.ap-southeast-1.compute.internal systemd[1]: sparkling-mcp.service: Scheduled restart job, restart counter is at 5.
+Mar 04 07:32:47 ip-172-31-28-106.ap-southeast-1.compute.internal systemd[1]: Stopped sparkling-mcp.service - Spark-ling MCP Server.
+Mar 04 07:32:47 ip-172-31-28-106.ap-southeast-1.compute.internal systemd[1]: Started sparkling-mcp.service - Spark-ling MCP Server.
+Mar 04 07:32:48 ip-172-31-28-106.ap-southeast-1.compute.internal python3.11[27469]: 2026-03-04 07:32:48,566 [sparkling-mcp] INFO: Starting sparkling-data-explorer MCP server (transport=sse)...
+Mar 04 07:32:48 ip-172-31-28-106.ap-southeast-1.compute.internal python3.11[27469]: Traceback (most recent call last):
+Mar 04 07:32:48 ip-172-31-28-106.ap-southeast-1.compute.internal python3.11[27469]:   File "/opt/sparkling-mcp/mcp/server.py", line 250, in <module>
+Mar 04 07:32:48 ip-172-31-28-106.ap-southeast-1.compute.internal python3.11[27469]:     app.run(transport="sse", host="0.0.0.0", port=port)
+Mar 04 07:32:48 ip-172-31-28-106.ap-southeast-1.compute.internal python3.11[27469]: TypeError: FastMCP.run() got an unexpected keyword argument 'host'
+Mar 04 07:32:48 ip-172-31-28-106.ap-southeast-1.compute.internal systemd[1]: sparkling-mcp.service: Main process exited, code=exited, status=1/FAILURE
+Mar 04 07:32:48 ip-172-31-28-106.ap-southeast-1.compute.internal systemd[1]: sparkling-mcp.service: Failed with result 'exit-code'.
+Mar 04 07:32:53 ip-172-31-28-106.ap-southeast-1.compute.internal systemd[1]: sparkling-mcp.service: Scheduled restart job, restart counter is at 6.
+Mar 04 07:32:53 ip-172-31-28-106.ap-southeast-1.compute.internal systemd[1]: Stopped sparkling-mcp.service - Spark-ling MCP Server.
+Mar 04 07:32:53 ip-172-31-28-106.ap-southeast-1.compute.internal systemd[1]: Started sparkling-mcp.service - Spark-ling MCP Server.
+

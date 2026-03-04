@@ -1,0 +1,38 @@
+[
+    {
+        "id": "amazon.titan-tg1-large",
+        "name": "Titan Text Large"
+    },
+    {
+        "id": "amazon.titan-image-generator-v2:0",
+        "name": "Titan Image Generator G1 v2"
+    },
+    {
+        "id": "amazon.titan-embed-g1-text-02",
+        "name": "Titan Text Embeddings v2"
+    },
+    {
+        "id": "amazon.titan-embed-text-v1:2:8k",
+        "name": "Titan Embeddings G1 - Text"
+    },
+    {
+        "id": "amazon.titan-embed-text-v1",
+        "name": "Titan Embeddings G1 - Text"
+    },
+    {
+        "id": "amazon.titan-embed-text-v2:0:8k",
+        "name": "Titan Text Embeddings V2"
+    },
+    {
+        "id": "amazon.titan-embed-text-v2:0",
+        "name": "Titan Text Embeddings V2"
+    },
+    {
+        "id": "amazon.titan-embed-image-v1:0",
+        "name": "Titan Multimodal Embeddings G1"
+    },
+    {
+        "id": "amazon.titan-embed-image-v1",
+        "name": "Titan Multimodal Embeddings G1"
+    }
+]

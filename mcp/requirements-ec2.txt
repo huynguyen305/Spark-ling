@@ -1,0 +1,13 @@
+# Lightweight MCP Server dependencies for EC2 deployment
+# (Athena backend only — no PySpark, no Databricks)
+#
+# Install with: pip install --no-cache-dir -r mcp/requirements-ec2.txt
+
+# MCP SDK
+mcp[cli]>=1.0.0
+
+# AWS SDK (S3, Athena, Glue)
+boto3>=1.28.0
+
+# Utilities
+python-dotenv>=1.0.0

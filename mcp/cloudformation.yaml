@@ -1,0 +1,352 @@
+# ═══════════════════════════════════════════════════════════
+# Spark-ling MCP Server — AWS CloudFormation Template
+# ═══════════════════════════════════════════════════════════
+# One-click deployment of MCP server infrastructure on AWS.
+#
+# Creates:
+#   - IAM Role with S3, Athena, Glue permissions
+#   - Security Group (SSH + MCP port)
+#   - EC2 instance with Docker and systemd service
+#   - (Optional) API key stored in SSM Parameter Store
+#
+# Deploy:
+#   aws cloudformation create-stack \
+#     --stack-name sparkling-mcp \
+#     --template-body file://mcp/cloudformation.yaml \
+#     --capabilities CAPABILITY_NAMED_IAM \
+#     --parameters \
+#       ParameterKey=S3Bucket,ParameterValue=sparkling-data-test \
+#       ParameterKey=McpApiKey,ParameterValue="$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")" \
+#       ParameterKey=McpBackend,ParameterValue=athena
+#
+# Teardown:
+#   aws cloudformation delete-stack --stack-name sparkling-mcp
+# ═══════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Spark-ling MCP Server — AI-assisted banking data exploration via
+  Model Context Protocol on EC2 with Athena backend.
+
+# ── Parameters ──────────────────────────────────────────
+Parameters:
+  S3Bucket:
+    Type: String
+    Description: S3 bucket containing Spark-ling data
+    Default: sparkling-data-test
+
+  KeyPairName:
+    Type: String
+    Default: ''
+    Description: >-
+      EC2 key pair name for SSH access.
+      Leave empty to skip SSH — use SSM Session Manager instead.
+
+  InstanceType:
+    Type: String
+    Default: t3.small
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+    Description: EC2 instance type
+
+  McpApiKey:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: >-
+      API key for MCP server authentication.
+      Leave empty to disable auth (not recommended for production).
+
+  McpBackend:
+    Type: String
+    Default: athena
+    AllowedValues:
+      - athena
+      - s3
+      - auto
+    Description: Backend engine for data queries
+
+  McpPort:
+    Type: Number
+    Default: 8080
+    Description: Port for MCP SSE transport
+
+  AllowedCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: >-
+      CIDR block allowed to access MCP server.
+      Restrict to your IP/VPN for production (e.g. 203.0.113.5/32).
+
+  AWSRegion:
+    Type: String
+    Default: ap-southeast-1
+    Description: AWS region
+
+  GitRepoUrl:
+    Type: String
+    Default: https://github.com/huynguyen305/Spark-ling.git
+    Description: Git repository URL for the Spark-ling project
+
+
+# ── Conditions ──────────────────────────────────────────
+Conditions:
+  HasApiKey: !Not [!Equals [!Ref McpApiKey, '']]
+  HasKeyPair: !Not [!Equals [!Ref KeyPairName, '']]
+
+
+# ── Resources ──────────────────────────────────────────
+Resources:
+
+  # ── IAM Role ────────────────────────────────────────
+  McpServerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: sparkling-mcp-data-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # S3 — read data, write Athena results
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource:
+                  - !Sub 'arn:aws:s3:::${S3Bucket}'
+                  - !Sub 'arn:aws:s3:::${S3Bucket}/*'
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource:
+                  - !Sub 'arn:aws:s3:::${S3Bucket}/athena-results/*'
+              # Athena — run queries
+              - Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                  - athena:StopQueryExecution
+                  - athena:ListWorkGroups
+                  - athena:GetWorkGroup
+                Resource: '*'
+              # Glue — catalog access (Athena uses Glue Data Catalog)
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetDatabases
+                  - glue:CreateDatabase
+                  - glue:GetTable
+                  - glue:GetTables
+                  - glue:CreateTable
+                  - glue:UpdateTable
+                  - glue:GetPartitions
+                Resource:
+                  - !Sub 'arn:aws:glue:${AWSRegion}:${AWS::AccountId}:catalog'
+                  - !Sub 'arn:aws:glue:${AWSRegion}:${AWS::AccountId}:database/sparkling'
+                  - !Sub 'arn:aws:glue:${AWSRegion}:${AWS::AccountId}:table/sparkling/*'
+              # CloudWatch — logging
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+
+  McpInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref McpServerRole
+
+  # ── SSM Parameter for API Key (optional) ────────────
+  ApiKeyParameter:
+    Type: AWS::SSM::Parameter
+    Condition: HasApiKey
+    Properties:
+      Name: /sparkling/mcp/api-key
+      Type: String
+      Value: !Ref McpApiKey
+      Description: API key for MCP server authentication
+
+  # ── Security Group ──────────────────────────────────
+  McpSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Spark-ling MCP server
+      SecurityGroupIngress:
+        # SSH access
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedCidr
+          Description: SSH access
+        # MCP server port
+        - IpProtocol: tcp
+          FromPort: !Ref McpPort
+          ToPort: !Ref McpPort
+          CidrIp: !Ref AllowedCidr
+          Description: MCP SSE transport
+      Tags:
+        - Key: Name
+          Value: sparkling-mcp-sg
+        - Key: Project
+          Value: Spark-ling
+
+  # ── EC2 Instance ────────────────────────────────────
+  McpServerInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      KeyName: !If [HasKeyPair, !Ref KeyPairName, !Ref 'AWS::NoValue']
+      IamInstanceProfile: !Ref McpInstanceProfile
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          AssociatePublicIpAddress: true
+          GroupSet:
+            - !GetAtt McpSecurityGroup.GroupId
+      ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+      Tags:
+        - Key: Name
+          Value: sparkling-mcp-server
+        - Key: Project
+          Value: Spark-ling
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+
+          # Always signal CloudFormation on exit (success or failure)
+          CFN_STATUS=1
+          trap '/opt/aws/bin/cfn-signal -e $CFN_STATUS --stack ${AWS::StackName} --resource McpServerInstance --region ${AWS::Region}' EXIT
+
+          # ── Add swap space (prevents OOM during pip install) ─
+          fallocate -l 1G /swapfile
+          chmod 600 /swapfile
+          mkswap /swapfile
+          swapon /swapfile
+          echo '/swapfile swap swap defaults 0 0' >> /etc/fstab
+
+          # ── System setup ───────────────────────────────
+          dnf update -y -q
+          dnf install -y python3.11 python3.11-pip git -q
+
+          # ── Clone project ──────────────────────────────
+          cd /opt
+          git clone ${GitRepoUrl} sparkling-mcp
+          cd sparkling-mcp
+
+          # ── Install Python deps (lightweight — no PySpark/Databricks) ──
+          python3.11 -m pip install --no-cache-dir -r mcp/requirements-ec2.txt -q
+
+          # ── Write environment config ───────────────────
+          cat > /opt/sparkling-mcp/mcp/.env << 'ENVEOF'
+          MCP_BACKEND=${McpBackend}
+          MCP_TRANSPORT=sse
+          MCP_PORT=${McpPort}
+          MCP_HOST=0.0.0.0
+          S3_BUCKET=${S3Bucket}
+          AWS_REGION=${AWSRegion}
+          ATHENA_DATABASE=sparkling
+          ATHENA_WORKGROUP=primary
+          ENVEOF
+
+          # Add API key if provided
+          if [ -n "${McpApiKey}" ]; then
+            echo "MCP_API_KEY=${McpApiKey}" >> /opt/sparkling-mcp/mcp/.env
+          fi
+
+          # ── Create systemd service ─────────────────────
+          cat > /etc/systemd/system/sparkling-mcp.service << 'SVCEOF'
+          [Unit]
+          Description=Spark-ling MCP Server
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=ec2-user
+          WorkingDirectory=/opt/sparkling-mcp
+          ExecStart=/usr/bin/python3.11 /opt/sparkling-mcp/mcp/server.py
+          Restart=always
+          RestartSec=5
+          EnvironmentFile=/opt/sparkling-mcp/mcp/.env
+
+          [Install]
+          WantedBy=multi-user.target
+          SVCEOF
+
+          # ── Fix ownership and start ────────────────────
+          chown -R ec2-user:ec2-user /opt/sparkling-mcp
+          systemctl daemon-reload
+          systemctl enable sparkling-mcp
+          systemctl start sparkling-mcp
+
+          # Mark success for cfn-signal trap
+          CFN_STATUS=0
+
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+
+
+# ── Outputs ─────────────────────────────────────────────
+Outputs:
+  InstanceId:
+    Description: EC2 instance ID
+    Value: !Ref McpServerInstance
+
+  PublicIp:
+    Description: Public IP address of the MCP server
+    Value: !GetAtt McpServerInstance.PublicIp
+
+  McpEndpoint:
+    Description: MCP server SSE endpoint URL
+    Value: !Sub 'http://${McpServerInstance.PublicIp}:${McpPort}/sse'
+
+  SshCommand:
+    Condition: HasKeyPair
+    Description: SSH command to connect to the instance
+    Value: !Sub 'ssh -i ~/.ssh/${KeyPairName}.pem ec2-user@${McpServerInstance.PublicIp}'
+
+  SsmCommand:
+    Description: Connect via SSM Session Manager (no key pair needed)
+    Value: !Sub 'aws ssm start-session --target ${McpServerInstance}'
+
+  LogsCommand:
+    Description: Command to view MCP server logs
+    Value: !Sub >-
+      aws ssm start-session --target ${McpServerInstance}
+      --document-name AWS-StartInteractiveCommand
+      --parameters command="journalctl -u sparkling-mcp -f"
+
+  IamRoleArn:
+    Description: IAM role ARN for the MCP server
+    Value: !GetAtt McpServerRole.Arn
+
+  VscodeConfig:
+    Description: VS Code MCP configuration snippet
+    Value: !Sub |
+      {
+        "servers": {
+          "sparkling-data-explorer": {
+            "type": "sse",
+            "url": "http://${McpServerInstance.PublicIp}:${McpPort}/sse",
+            "headers": {
+              "Authorization": "Bearer YOUR_API_KEY"
+            }
+          }
+        }
+      }
