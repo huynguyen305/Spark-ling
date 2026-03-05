@@ -25,11 +25,12 @@ class AthenaBackend:
     """Backend that queries S3 data via AWS Athena (serverless SQL)."""
 
     # Known datasets — mapped to S3 paths within the bucket
+    # Each table lives in its own subdirectory as Parquet files
     KNOWN_TABLES = {
-        "customers": {"format": "csv", "path": "raw/customers.csv"},
-        "accounts": {"format": "csv", "path": "raw/accounts.csv"},
-        "transactions": {"format": "csv", "path": "raw/transactions.csv"},
-        "branches": {"format": "csv", "path": "raw/branches.csv"},
+        "customers": {"format": "parquet", "path": "raw/customers/"},
+        "accounts": {"format": "parquet", "path": "raw/accounts/"},
+        "transactions": {"format": "parquet", "path": "raw/transactions/"},
+        "branches": {"format": "parquet", "path": "raw/branches/"},
     }
 
     # CSV schema definitions for CREATE EXTERNAL TABLE
@@ -146,10 +147,10 @@ class AthenaBackend:
         info = self.KNOWN_TABLES[table_name]
         s3_path = f"s3://{self.bucket}/{self.data_prefix}/{info['path']}"
 
-        # For CSV files, we need a folder not a file — Athena reads directory
-        # Use the parent folder and set up SerDe for CSV
+        # Each table has its own directory in S3
         if info["format"] == "csv":
-            # Point to the file's parent directory or the file itself
+            # CSV tables — point to the directory containing CSV file(s)
+            s3_dir = s3_path.rstrip("/") + "/"
             sql = f"""
                 CREATE EXTERNAL TABLE IF NOT EXISTS {self.database}.{table_name} (
                     {schema}
@@ -161,7 +162,7 @@ class AthenaBackend:
                     'escapeChar' = '\\\\'
                 )
                 STORED AS TEXTFILE
-                LOCATION '{s3_path.rsplit('/', 1)[0]}/'
+                LOCATION '{s3_dir}'
                 TBLPROPERTIES ('skip.header.line.count'='1')
             """
         elif info["format"] == "parquet":

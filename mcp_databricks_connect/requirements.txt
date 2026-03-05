@@ -1,0 +1,11 @@
+# Databricks Connect MCP Server — Dependencies
+# Install with: pip install -r mcp_databricks_connect/requirements.txt
+
+# MCP SDK
+mcp[cli]>=1.0.0
+
+# Databricks Connect (matches DBR 17.x — adjust to your runtime version)
+databricks-connect>=17.0,<18.0
+
+# Utilities
+python-dotenv>=1.0.0

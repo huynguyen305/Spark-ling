@@ -17,10 +17,10 @@ class S3Backend:
 
     # Known datasets in the Spark-ling project
     KNOWN_TABLES = {
-        "customers": {"format": "csv", "path": "raw/customers.csv"},
-        "accounts": {"format": "csv", "path": "raw/accounts.csv"},
-        "transactions": {"format": "csv", "path": "raw/transactions.csv"},
-        "branches": {"format": "csv", "path": "raw/branches.csv"},
+        "customers": {"format": "parquet", "path": "raw/customers/"},
+        "accounts": {"format": "parquet", "path": "raw/accounts/"},
+        "transactions": {"format": "parquet", "path": "raw/transactions/"},
+        "branches": {"format": "parquet", "path": "raw/branches/"},
     }
 
     def __init__(self, config: dict):

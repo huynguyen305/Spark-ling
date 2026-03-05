@@ -46,6 +46,8 @@ logs/
 aws/.env
 mcp/.env
 gcp/.env
+mcp_databricks_connect/.env
+.env
 .secrets
 
 # ignore zip files
