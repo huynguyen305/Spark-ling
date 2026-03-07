@@ -191,10 +191,10 @@ def get_spark_session():
             .config("spark.hadoop.fs.s3a.endpoint",
                     f"s3.{os.environ.get('AWS_REGION', 'ap-southeast-1')}.amazonaws.com")
     else:
-        # Use IAM instance profile (when running on EC2/EMR)
+        # Use Default credentials chain (works with ~/.aws/credentials, ENV vars, or EC2/EMR roles)
         builder = builder \
             .config("spark.hadoop.fs.s3a.aws.credentials.provider",
-                    "com.amazonaws.auth.InstanceProfileCredentialsProvider")
+                    "com.amazonaws.auth.DefaultAWSCredentialsProviderChain")
 
     return builder.getOrCreate()
 
