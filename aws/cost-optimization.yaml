@@ -1,0 +1,329 @@
+# ═══════════════════════════════════════════════════════════
+# Spark-ling — EC2 Cost Optimization Stack
+# ═══════════════════════════════════════════════════════════
+# Two-layer auto-stop for EC2 instances:
+#   Layer 1: CloudWatch alarm — stops idle instances (CPU < threshold)
+#   Layer 2: SSM Maintenance Windows — scheduled stop/start
+#
+# Deploy:
+#   aws cloudformation create-stack \
+#     --stack-name sparkling-cost-opt \
+#     --template-body file://aws/cost-optimization.yaml \
+#     --capabilities CAPABILITY_NAMED_IAM \
+#     --parameters \
+#       ParameterKey=InstanceId,ParameterValue=i-0123456789abcdef0 \
+#       ParameterKey=NotificationEmail,ParameterValue=you@example.com
+#
+# Teardown:
+#   aws cloudformation delete-stack --stack-name sparkling-cost-opt
+# ═══════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Spark-ling EC2 Cost Optimization — CloudWatch idle-instance alarm
+  with auto-stop action + SSM scheduled stop/start windows.
+
+# ── Parameters ──────────────────────────────────────────
+Parameters:
+  InstanceId:
+    Type: AWS::EC2::Instance::Id
+    Description: EC2 instance ID to monitor and schedule
+
+  CpuThreshold:
+    Type: Number
+    Default: 5
+    MinValue: 1
+    MaxValue: 100
+    Description: >-
+      CPU utilization percentage below which the instance is
+      considered idle. Default 5%.
+
+  IdlePeriodMinutes:
+    Type: String
+    Default: "60"
+    AllowedValues:
+      ["5", "10", "15", "30", "60", "120", "180", "360", "720", "1440"]
+    Description: >-
+      Duration (minutes) of sustained low CPU before auto-stop.
+      Must be a multiple of the CloudWatch evaluation period.
+
+  StopCron:
+    Type: String
+    Default: "cron(0 15 ? * * *)"
+    Description: >-
+      SSM cron for nightly stop (UTC). Default: 15:00 UTC = 22:00 ICT.
+      Format: cron(min hour day-of-month month day-of-week year)
+
+  StartCron:
+    Type: String
+    Default: "cron(0 1 ? * MON-FRI *)"
+    Description: >-
+      SSM cron for morning start (UTC). Default: 01:00 UTC = 08:00 ICT.
+      Format: cron(min hour day-of-month month day-of-week year)
+
+  NotificationEmail:
+    Type: String
+    Default: ""
+    Description: >-
+      Email address for stop/start notifications.
+      Leave empty to skip SNS notifications.
+
+  ProjectTag:
+    Type: String
+    Default: Spark-ling
+    Description: Value of the 'Project' tag used to target instances
+
+# ── Conditions ──────────────────────────────────────────
+Conditions:
+  HasNotificationEmail: !Not [!Equals [!Ref NotificationEmail, ""]]
+
+# ── Resources ──────────────────────────────────────────
+Resources:
+  # ════════════════════════════════════════════════════════
+  # Layer 1 — CloudWatch Alarm (activity-based auto-stop)
+  # ════════════════════════════════════════════════════════
+
+  # Optional SNS topic for alarm notifications
+  IdleAlarmSnsTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasNotificationEmail
+    Properties:
+      TopicName: sparkling-idle-instance-alerts
+      DisplayName: Spark-ling Idle Instance Alerts
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  IdleAlarmSnsSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasNotificationEmail
+    Properties:
+      TopicArn: !Ref IdleAlarmSnsTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  # CloudWatch Alarm — triggers EC2 stop when CPU is idle
+  CpuIdleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "sparkling-idle-stop-${InstanceId}"
+      AlarmDescription: !Sub >-
+        Stops EC2 instance ${InstanceId} when average CPU utilization
+        stays below ${CpuThreshold}% for ${IdlePeriodMinutes} minutes.
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Statistic: Average
+      Period: 300 # 5-minute data points
+      EvaluationPeriods: !Select
+        - 0
+        - - !FindInMap [IdlePeriodToEvalPeriods, !Ref IdlePeriodMinutes, Count]
+      Threshold: !Ref CpuThreshold
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref InstanceId
+      # Native EC2 stop action — no Lambda needed
+      AlarmActions:
+        - !Sub "arn:aws:automate:${AWS::Region}:ec2:stop"
+        - !If
+          - HasNotificationEmail
+          - !Ref IdleAlarmSnsTopic
+          - !Ref "AWS::NoValue"
+      OKActions:
+        - !If
+          - HasNotificationEmail
+          - !Ref IdleAlarmSnsTopic
+          - !Ref "AWS::NoValue"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  # ════════════════════════════════════════════════════════
+  # Layer 2 — SSM Maintenance Windows (schedule-based)
+  # ════════════════════════════════════════════════════════
+
+  # IAM role for SSM to execute EC2 stop/start
+  SsmAutomationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sparkling-ssm-cost-opt-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ssm.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: sparkling-ec2-stop-start
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:StopInstances
+                  - ec2:StartInstances
+                  - ec2:DescribeInstances
+                  - ec2:DescribeInstanceStatus
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    "aws:ResourceTag/Project": !Ref ProjectTag
+              # Allow describe without tag constraint (needed for waiter)
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeInstanceStatus
+                Resource: "*"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  # ── Nightly Stop Window ──────────────────────────────
+  StopMaintenanceWindow:
+    Type: AWS::SSM::MaintenanceWindow
+    Properties:
+      Name: sparkling-nightly-stop
+      Description: Automatically stop Spark-ling EC2 instances at night
+      Schedule: !Ref StopCron
+      ScheduleTimezone: UTC
+      Duration: 1
+      Cutoff: 0
+      AllowUnassociatedTargets: false
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  StopWindowTarget:
+    Type: AWS::SSM::MaintenanceWindowTarget
+    Properties:
+      WindowId: !Ref StopMaintenanceWindow
+      ResourceType: INSTANCE
+      Targets:
+        - Key: InstanceIds
+          Values:
+            - !Ref InstanceId
+      Name: sparkling-stop-target
+      Description: Target instance for nightly stop
+
+  StopWindowTask:
+    Type: AWS::SSM::MaintenanceWindowTask
+    Properties:
+      WindowId: !Ref StopMaintenanceWindow
+      TaskType: AUTOMATION
+      TaskArn: AWS-StopEC2Instance
+      ServiceRoleArn: !GetAtt SsmAutomationRole.Arn
+      MaxConcurrency: "1"
+      MaxErrors: "1"
+      Priority: 1
+      Targets:
+        - Key: WindowTargetIds
+          Values:
+            - !Ref StopWindowTarget
+      TaskInvocationParameters:
+        MaintenanceWindowAutomationParameters:
+          Parameters:
+            InstanceId:
+              - "{{TARGET_ID}}"
+
+  # ── Morning Start Window ─────────────────────────────
+  StartMaintenanceWindow:
+    Type: AWS::SSM::MaintenanceWindow
+    Properties:
+      Name: sparkling-morning-start
+      Description: Automatically start Spark-ling EC2 instances in the morning (weekdays)
+      Schedule: !Ref StartCron
+      ScheduleTimezone: UTC
+      Duration: 1
+      Cutoff: 0
+      AllowUnassociatedTargets: false
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  StartWindowTarget:
+    Type: AWS::SSM::MaintenanceWindowTarget
+    Properties:
+      WindowId: !Ref StartMaintenanceWindow
+      ResourceType: INSTANCE
+      Targets:
+        - Key: InstanceIds
+          Values:
+            - !Ref InstanceId
+      Name: sparkling-start-target
+      Description: Target instance for morning start
+
+  StartWindowTask:
+    Type: AWS::SSM::MaintenanceWindowTask
+    Properties:
+      WindowId: !Ref StartMaintenanceWindow
+      TaskType: AUTOMATION
+      TaskArn: AWS-StartEC2Instance
+      ServiceRoleArn: !GetAtt SsmAutomationRole.Arn
+      MaxConcurrency: "1"
+      MaxErrors: "1"
+      Priority: 1
+      Targets:
+        - Key: WindowTargetIds
+          Values:
+            - !Ref StartWindowTarget
+      TaskInvocationParameters:
+        MaintenanceWindowAutomationParameters:
+          Parameters:
+            InstanceId:
+              - "{{TARGET_ID}}"
+
+# ── Mappings ────────────────────────────────────────────
+Mappings:
+  IdlePeriodToEvalPeriods:
+    # Maps IdlePeriodMinutes → number of 5-min evaluation periods
+    "5":
+      Count: 1
+    "10":
+      Count: 2
+    "15":
+      Count: 3
+    "30":
+      Count: 6
+    "60":
+      Count: 12
+    "120":
+      Count: 24
+    "180":
+      Count: 36
+    "360":
+      Count: 72
+    "720":
+      Count: 144
+    "1440":
+      Count: 288
+
+# ── Outputs ─────────────────────────────────────────────
+Outputs:
+  AlarmArn:
+    Description: ARN of the CloudWatch idle-CPU alarm
+    Value: !GetAtt CpuIdleAlarm.Arn
+
+  AlarmConsoleUrl:
+    Description: Direct link to the alarm in CloudWatch console
+    Value: !Sub >-
+      https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#alarmsV2:alarm/${CpuIdleAlarm}
+
+  StopWindowId:
+    Description: SSM Maintenance Window ID for nightly stop
+    Value: !Ref StopMaintenanceWindow
+
+  StartWindowId:
+    Description: SSM Maintenance Window ID for morning start
+    Value: !Ref StartMaintenanceWindow
+
+  SnsTopicArn:
+    Condition: HasNotificationEmail
+    Description: SNS topic ARN for idle-instance alerts
+    Value: !Ref IdleAlarmSnsTopic
+
+  SsmConsoleUrl:
+    Description: Direct link to Maintenance Windows in SSM console
+    Value: !Sub >-
+      https://${AWS::Region}.console.aws.amazon.com/systems-manager/maintenance-windows?region=${AWS::Region}
