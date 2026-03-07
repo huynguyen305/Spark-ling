@@ -1,0 +1,379 @@
+# ===========================================================================
+# AWS Glue & Lambda Infrastructure for Spark-ling Migration
+# ===========================================================================
+#
+# LEARNING NOTES:
+# ---------------
+# 1. AWS GLUE is a serverless ETL service. We use a "Python Shell" job type
+#    (not Spark) since our seed script is pure Python + psycopg2.
+#    - Python Shell jobs cost $0.44/hr per DPU (1 DPU = 1 vCPU + 4GB)
+#    - Our seed job takes ~5-10 min ≈ $0.04-0.07 one-time
+#
+# 2. AWS LAMBDA is perfect for the daily generator:
+#    - 15-minute max timeout (plenty for ~5K transactions)
+#    - Free tier: 1M requests + 400,000 GB-seconds/month
+#    - Needs a psycopg2 Lambda Layer (compiled for Amazon Linux 2)
+#
+# 3. EVENTBRIDGE (formerly CloudWatch Events) triggers Lambda on a schedule.
+#    CRON format: cron(minutes hours day-of-month month day-of-week year)
+#    Note: EventBridge cron uses UTC!
+#
+# 4. VPC ACCESS: Both Lambda and Glue need network access to RDS.
+#    Since our RDS is publicly accessible, Lambda can reach it without VPC.
+#    But in production, you'd use VPC endpoints + private subnets.
+#
+# USAGE:
+#   # First, upload Glue script and Lambda zip to S3:
+#   aws s3 cp aws/glue_lambda/rds_seed_glue.py s3://sparkling-data-test/scripts/rds_seed_glue.py
+#   ./aws/glue_lambda/lambda_daily_generator/build_and_deploy.sh
+#
+#   # Then deploy the stack:
+#   aws cloudformation deploy \
+#     --template-file aws/glue_lambda/glue_lambda_setup.yaml \
+#     --stack-name sparkling-glue-lambda \
+#     --capabilities CAPABILITY_NAMED_IAM \
+#     --parameter-overrides \
+#       RDSHost=sparkling-postgres-db.xxx.rds.amazonaws.com \
+#       RDSPassword='SparkLing2026!' \
+#     --region ap-southeast-1
+#
+# ===========================================================================
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: |
+  Glue Python Shell job (data seeding) + Lambda + EventBridge (daily simulation) for the Spark-ling PostgreSQL migration learning project.
+
+# ─── Parameters ────────────────────────────────────────────────────────────
+
+Parameters:
+  RDSHost:
+    Type: String
+    Description: RDS PostgreSQL endpoint hostname
+    # LEARNING: We pass this as a parameter rather than hardcoding it.
+    # In production, you'd use Secrets Manager or SSM Parameter Store.
+
+  RDSPort:
+    Type: String
+    Default: "5432"
+
+  RDSDatabase:
+    Type: String
+    Default: sparkdb
+
+  RDSUsername:
+    Type: String
+    Default: sparkadmin
+
+  RDSPassword:
+    Type: String
+    NoEcho: true
+    Description: |
+      RDS master password. NoEcho=true hides it from CloudFormation console. LEARNING: In production, use AWS Secrets Manager instead of passing passwords as parameters. Secrets Manager auto-rotates credentials.
+
+  S3Bucket:
+    Type: String
+    Default: sparkling-data-test
+    Description: S3 bucket for Glue scripts and Lambda code
+
+  ScheduleExpression:
+    Type: String
+    Default: cron(0 1 ? * MON-FRI *)
+    Description: |
+      EventBridge schedule for daily Lambda trigger. Default: 1:00 UTC = 8:00 AM ICT (weekdays only). LEARNING: EventBridge cron format differs from Linux cron:
+        - Uses 6 fields (+ year), not 5
+        - ? = "no specific value" (required for day-of-month OR day-of-week)
+        - MON-FRI = weekdays only
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-03ad95e9214e35d43
+
+  SubnetId1:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-03829146418012d40
+
+  SubnetId2:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-0e6fd79968da30dea
+
+  RDSSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Default: sg-06f3bd1baaeb5f6a5
+    Description: Existing RDS security group (allows port 5432)
+
+Resources:
+  # =========================================================================
+  # IAM Roles
+  # =========================================================================
+
+  # ─── Glue IAM Role ──────────────────────────────────────────────────────
+  # LEARNING: Every AWS service needs an IAM role to define what it can do.
+  # Glue needs: S3 read (for script), CloudWatch Logs (for logging),
+  # and network access to RDS (via VPC or public endpoint).
+  # ─────────────────────────────────────────────────────────────────────────
+  GlueServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sparkling-glue-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # LEARNING: AWSGlueServiceRole gives Glue permissions to:
+        # - Read/write to S3 (for scripts and temporary data)
+        # - Write to CloudWatch Logs
+        # - Create/manage Glue catalog resources
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: sparkling-glue-s3-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::${S3Bucket}
+                  - !Sub arn:aws:s3:::${S3Bucket}/*
+      Tags:
+        - Key: Project
+          Value: Spark-ling
+
+  # ─── Lambda IAM Role ────────────────────────────────────────────────────
+  # LEARNING: Lambda role needs:
+  # - Basic execution (CloudWatch Logs)
+  # - VPC access (ENI create/delete/describe) to run inside the VPC
+  # Lambda must be in the same VPC as RDS to connect via private networking.
+  # AWSLambdaVPCAccessExecutionRole adds the ENI permissions automatically.
+  # ─────────────────────────────────────────────────────────────────────────
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sparkling-daily-generator-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        # LEARNING: VPC access requires ENI management permissions.
+        # This managed policy adds ec2:CreateNetworkInterface,
+        # ec2:DescribeNetworkInterfaces, ec2:DeleteNetworkInterface.
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Tags:
+        - Key: Project
+          Value: Spark-ling
+
+  # =========================================================================
+  # AWS Glue — Data Seed Job
+  # =========================================================================
+
+  # ─── Glue Connection (PostgreSQL JDBC) ──────────────────────────────────
+  # LEARNING: Glue Connections define reusable database endpoints.
+  # Even for Python Shell jobs, a connection can provide VPC routing.
+  # For our publicly accessible RDS, we pass credentials as job args instead.
+  # We still create the connection for the learning experience.
+  # ─────────────────────────────────────────────────────────────────────────
+  GluePostgresConnection:
+    Type: AWS::Glue::Connection
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      ConnectionInput:
+        Name: sparkling-postgres-connection
+        Description: PostgreSQL RDS connection for Spark-ling migration
+        ConnectionType: JDBC
+        ConnectionProperties:
+          JDBC_CONNECTION_URL: !Sub jdbc:postgresql://${RDSHost}:${RDSPort}/${RDSDatabase}
+          USERNAME: !Ref RDSUsername
+          PASSWORD: !Ref RDSPassword
+        PhysicalConnectionRequirements:
+          AvailabilityZone: ap-southeast-1a
+          SubnetId: !Ref SubnetId1
+          SecurityGroupIdList:
+            - !Ref RDSSecurityGroupId
+
+  # ─── Glue Python Shell Job ─────────────────────────────────────────────
+  # LEARNING: Glue job types:
+  #   - glueetl: Spark-based ETL (PySpark), billed per DPU-hour
+  #   - pythonshell: Pure Python scripts, cheaper ($0.44/hr per DPU)
+  #   - streaming: Real-time Spark Structured Streaming
+  #
+  # Python Shell is ideal for our seeder since we use psycopg2, not Spark.
+  # MaxCapacity: 0.0625 (1/16 DPU) or 1 DPU. We use 1 DPU for speed.
+  # ─────────────────────────────────────────────────────────────────────────
+  GlueSeedJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: sparkling-rds-seed
+      Description: |
+        Seeds PostgreSQL RDS with banking data (3.38M rows). Run once at migration start. Takes ~5-10 minutes.
+      Role: !GetAtt GlueServiceRole.Arn
+      Command:
+        Name: pythonshell
+        PythonVersion: "3.9"
+        ScriptLocation: !Sub s3://${S3Bucket}/scripts/rds_seed_glue.py
+      DefaultArguments:
+        "--RDS_HOST": !Ref RDSHost
+        "--RDS_PORT": !Ref RDSPort
+        "--RDS_DATABASE": !Ref RDSDatabase
+        "--RDS_USERNAME": !Ref RDSUsername
+        "--RDS_PASSWORD": !Ref RDSPassword
+        # LEARNING: Glue job arguments must start with --
+        # They're accessible via sys.argv or getResolvedOptions()
+        "--additional-python-modules": psycopg2-binary,numpy
+        # LEARNING: --additional-python-modules tells Glue to
+        # pip install these packages at job start. Saves us from
+        # building custom wheels or layers!
+      MaxCapacity: 1
+      GlueVersion: "3.0"
+      Timeout: 30
+      MaxRetries: 0
+      Tags:
+        Project: Spark-ling
+        Purpose: data-seeding
+
+  # =========================================================================
+  # AWS Lambda — Daily Generator
+  # =========================================================================
+
+  # ─── psycopg2 Lambda Layer ─────────────────────────────────────────────
+  # LEARNING: Lambda Layers are shared code packages. psycopg2 needs
+  # to be compiled for Amazon Linux 2 (Lambda's runtime OS).
+  # We upload a pre-built layer to S3 via build_and_deploy.sh.
+  #
+  # Layer structure in zip:
+  #   python/
+  #     psycopg2/
+  #       __init__.py
+  #       ...
+  # ─────────────────────────────────────────────────────────────────────────
+  Psycopg2Layer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: sparkling-psycopg2
+      Description: psycopg2-binary compiled for Amazon Linux 2 (Python 3.12)
+      Content:
+        S3Bucket: !Ref S3Bucket
+        S3Key: layers/psycopg2-layer.zip
+      CompatibleRuntimes:
+        - python3.12
+      CompatibleArchitectures:
+        - x86_64
+
+  # ─── Lambda Function ───────────────────────────────────────────────────
+  # LEARNING: Lambda pricing:
+  #   - Requests: $0.20 per 1M requests (first 1M free)
+  #   - Duration: $0.0000166667 per GB-second (first 400K GB-s free)
+  #   - Our function: 256MB × ~30s = 7.5 GB-s per invocation
+  #   - Monthly cost (weekdays only): 22 days × 7.5 = 165 GB-s ≈ FREE
+  # ─────────────────────────────────────────────────────────────────────────
+  DailyGeneratorLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: sparkling-daily-generator
+      Description: |
+        Simulates daily banking activity: ~5K transactions, ~200 customer updates, balance snapshots.
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref S3Bucket
+        S3Key: lambda/daily-generator.zip
+      Layers:
+        - !Ref Psycopg2Layer
+      # LEARNING: For high-volume data generation (2M+ rows):
+      # - Memory: Increased to 3008MB to hold large transaction lists in RAM.
+      # - Timeout: Increased to 900s (max) to allow time for massive batch inserts.
+      # - CPU: In Lambda, CPU scales linearly with memory. 3008MB provides ~2 vCPUs.
+      Timeout: 900
+      MemorySize: 3008
+      Environment:
+        Variables:
+          RDS_HOST: !Ref RDSHost
+          RDS_PORT: !Ref RDSPort
+          RDS_DATABASE: !Ref RDSDatabase
+          RDS_USERNAME: !Ref RDSUsername
+          RDS_PASSWORD: !Ref RDSPassword
+          # LEARNING: Environment variables are the simplest way to pass
+          # config to Lambda. For production, use Secrets Manager with
+          # the AWS Parameters and Secrets Lambda Extension.
+      # ─── VPC Configuration ──────────────────────────────────────────
+      # LEARNING: Placing Lambda inside the VPC lets it access RDS
+      # via private IP (172.31.x.x). Without VPC config, Lambda runs
+      # on AWS's public network and can't reach RDS unless you open
+      # the SG to 0.0.0.0/0 (bad practice!).
+      # Trade-off: VPC Lambda has cold starts (~1-2s longer).
+      # ────────────────────────────────────────────────────────────────
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref RDSSecurityGroupId
+        SubnetIds:
+          - !Ref SubnetId1
+          - !Ref SubnetId2
+      Tags:
+        - Key: Project
+          Value: Spark-ling
+        - Key: Purpose
+          Value: daily-simulation
+
+  # ─── EventBridge Scheduled Rule ────────────────────────────────────────
+  # LEARNING: EventBridge (CloudWatch Events v2) is the preferred way
+  # to trigger Lambda on a schedule. It supports:
+  #   - rate(): rate(5 minutes), rate(1 hour)
+  #   - cron(): cron(0 1 ? * MON-FRI *)  = weekdays at 1AM UTC
+  #
+  # Default: 1:00 UTC = 8:00 AM ICT (Vietnam timezone, UTC+7)
+  # ─────────────────────────────────────────────────────────────────────────
+  DailyGeneratorSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: sparkling-daily-generator-schedule
+      ScheduleExpression: cron(0 19,5,11 ? * MON-SUN *)
+      State: ENABLED
+      Description: >
+        Triggers daily banking simulation on weekdays at 8AM ICT (1AM UTC).
+        LEARNING: Use State: DISABLED to deploy without immediate triggers.
+        Enable when ready: aws events enable-rule --name
+        sparkling-daily-generator-schedule
+      EventBusName: default
+      Targets:
+        - Id: Id6638a42f-fc64-44a3-8fdb-dc7c3d07afff
+          Arn:
+            Fn::Sub: >-
+              arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:sparkling-daily-generator
+
+  # Permission for EventBridge to invoke Lambda
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DailyGeneratorLambda
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DailyGeneratorSchedule.Arn
+
+# ─── Outputs ──────────────────────────────────────────────────────────────
+
+Outputs:
+  GlueJobName:
+    Description: |
+      Glue job name. Run with: aws glue start-job-run --job-name sparkling-rds-seed --region ap-southeast-1
+    Value: !Ref GlueSeedJob
+
+  LambdaFunctionName:
+    Description: |
+      Lambda function name. Test with: aws lambda invoke --function-name sparkling-daily-generator --payload '{}' /dev/stdout
+    Value: !Ref DailyGeneratorLambda
+
+  EventBridgeRule:
+    Description: |
+      Enable the schedule with: aws events enable-rule --name sparkling-daily-generator-schedule --region ap-southeast-1
+    Value: !Ref DailyGeneratorSchedule

@@ -1,0 +1,228 @@
+################################################################################
+# RDS PostgreSQL CloudFormation Template
+# =======================================
+# This template provisions a PostgreSQL RDS instance for the migration simulation.
+#
+# LEARNING NOTES:
+# ---------------
+# 1. We use PostgreSQL instead of Oracle because AWS free-plan accounts
+#    don't support Oracle RDS. PostgreSQL is functionally similar and
+#    the migration pipeline concepts (JDBC, CDC, Delta MERGE) are identical.
+#
+# 2. PostgreSQL is the #1 open-source relational database. Many companies
+#    (including some banks) migrate FROM Oracle TO PostgreSQL to save on
+#    licensing costs — so this is actually a very realistic scenario!
+#
+# 3. db.t3.medium (2 vCPU, 4 GiB RAM) — the smallest PostgreSQL-capable
+#    burstable instance. Production uses r6g/r7g instances (64+ GiB RAM).
+#
+# 4. Single-AZ for cost savings. Production always uses Multi-AZ for HA.
+#
+# COST:
+#   db.t3.medium with 20GB gp2 = ~$0.04/hr (~$0.96/day)
+#   After free tier: ~$0.02/hr (~$0.48/day)
+#
+# USAGE:
+#   aws cloudformation deploy \
+#     --template-file aws/rds/rds_setup.yaml \
+#     --stack-name sparkling-rds-postgres \
+#     --parameter-overrides \
+#       MasterPassword='SparkLing2026!' \
+#       AllowedCIDR=$(curl -s ifconfig.me)/32 \
+#     --region ap-southeast-1
+#
+#   # Get the RDS endpoint:
+#   aws cloudformation describe-stacks \
+#     --stack-name sparkling-rds-postgres \
+#     --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue]' \
+#     --output table
+################################################################################
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  PostgreSQL RDS instance for Spark-ling migration simulation.
+  Simulates a source database for RDS-to-Databricks migration.
+
+Parameters:
+  MasterUsername:
+    Type: String
+    Default: sparkadmin
+    Description: >
+      Master username for the RDS instance.
+      LEARNING: 'admin' is a reserved word in PostgreSQL! Use 'sparkadmin' instead.
+      In production, use a dedicated service account with least-privilege access.
+
+  MasterPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: >
+      Master password (min 8 chars, must include uppercase, lowercase, number).
+      LEARNING: In production, use AWS Secrets Manager to rotate credentials.
+
+  AllowedCIDR:
+    Type: String
+    Default: "0.0.0.0/0"
+    Description: >
+      CIDR block allowed to connect to the database.
+      LEARNING: Use your IP (e.g., 1.2.3.4/32). Never use 0.0.0.0/0 in production!
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-03ad95e9214e35d43
+    Description: >
+      VPC ID for the RDS instance. Default is your default VPC.
+      LEARNING: In production, you'd have a dedicated VPC with private subnets.
+
+  SubnetId1:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-03829146418012d40
+    Description: First subnet (ap-southeast-1a)
+
+  SubnetId2:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-0e6fd79968da30dea
+    Description: Second subnet (ap-southeast-1b)
+
+  SubnetId3:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-07bb66a56e0294f20
+    Description: Third subnet (ap-southeast-1c)
+
+  EnvironmentTag:
+    Type: String
+    Default: learning
+    AllowedValues: [learning, dev, staging]
+    Description: Environment tag for cost tracking.
+
+Resources:
+  #############################################################################
+  # VPC Security Group
+  # ------------------
+  # LEARNING: Security groups are stateful firewalls. Inbound rules automatically
+  # allow return traffic. PostgreSQL uses port 5432 (Oracle uses 1521).
+  #############################################################################
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow PostgreSQL access for Spark-ling migration
+      GroupName: sparkling-rds-postgres-sg
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: !Ref AllowedCIDR
+          Description: PostgreSQL access from allowed CIDR
+      Tags:
+        - Key: Project
+          Value: Spark-ling
+        - Key: Environment
+          Value: !Ref EnvironmentTag
+
+  #############################################################################
+  # DB Subnet Group
+  # ----------------
+  # LEARNING: RDS requires a subnet group spanning at least 2 AZs, even for
+  # Single-AZ deployments. This is an AWS requirement for failover readiness.
+  #############################################################################
+  RDSSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for Spark-ling PostgreSQL RDS
+      SubnetIds:
+        - !Ref SubnetId1
+        - !Ref SubnetId2
+        - !Ref SubnetId3
+      Tags:
+        - Key: Project
+          Value: Spark-ling
+
+  #############################################################################
+  # RDS PostgreSQL Instance
+  # ------------------------
+  # LEARNING:
+  # - Engine: postgres (open-source, no license fees!)
+  # - AllocatedStorage: 20 GB (free-tier eligible with gp2).
+  # - StorageType: gp2 = General Purpose SSD (free tier). gp3 is newer but
+  #   NOT free-tier eligible.
+  # - BackupRetentionPeriod: 0 = no automated backups (saves cost for learning).
+  # - DeletionProtection: false = can delete easily after learning.
+  #
+  # COMPARISON (Oracle vs PostgreSQL):
+  # - Oracle: License Included or BYOL, $0.18/hr minimum
+  # - PostgreSQL: Free, open-source, $0.02/hr (or free tier)
+  # - Both support: ACID, MVCC, complex queries, stored procedures
+  # - Oracle extras: RAC, Data Guard, GoldenGate (enterprise features)
+  #############################################################################
+  PostgresRDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: sparkling-postgres-db
+      Engine: postgres
+      EngineVersion: "17.4"
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: 20
+      StorageType: gp2
+      MasterUsername: !Ref MasterUsername
+      MasterUserPassword: !Ref MasterPassword
+      DBName: sparkdb
+      # Network
+      DBSubnetGroupName: !Ref RDSSubnetGroup
+      PubliclyAccessible: true
+      VPCSecurityGroups:
+        - !GetAtt RDSSecurityGroup.GroupId
+      # Backup & Maintenance
+      BackupRetentionPeriod: 0
+      MultiAZ: false
+      AutoMinorVersionUpgrade: false
+      DeletionProtection: false
+      # Tags
+      Tags:
+        - Key: Project
+          Value: Spark-ling
+        - Key: Environment
+          Value: !Ref EnvironmentTag
+        - Key: auto-stop
+          Value: "true"
+        - Key: Purpose
+          Value: migration-simulation
+    DeletionPolicy: Delete
+
+Outputs:
+  RDSEndpoint:
+    Description: >
+      PostgreSQL RDS endpoint. Use this in your connection string.
+      JDBC URL format: jdbc:postgresql://<endpoint>:5432/sparkdb
+    Value: !GetAtt PostgresRDSInstance.Endpoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-Endpoint"
+
+  RDSPort:
+    Description: PostgreSQL port (always 5432)
+    Value: !GetAtt PostgresRDSInstance.Endpoint.Port
+
+  JDBCUrl:
+    Description: >
+      Full JDBC URL for Spark JDBC reader.
+      LEARNING: Spark uses this URL in spark.read.jdbc() for the full load.
+    Value: !Sub
+      - "jdbc:postgresql://${Endpoint}:5432/sparkdb"
+      - Endpoint: !GetAtt PostgresRDSInstance.Endpoint.Address
+
+  SecurityGroupId:
+    Description: Security group ID (needed if connecting from EC2/EMR)
+    Value: !GetAtt RDSSecurityGroup.GroupId
+
+  ConnectionCommand:
+    Description: >
+      Quick connect test using Python psycopg2.
+    Value: !Sub
+      - |
+        python3 -c "
+        import psycopg2
+        conn = psycopg2.connect(host='${Endpoint}', port=5432, dbname='sparkdb', user='${MasterUsername}', password='<YOUR_PASSWORD>')
+        cur = conn.cursor(); cur.execute('SELECT version()'); print(cur.fetchone()[0])
+        conn.close()
+        "
+      - Endpoint: !GetAtt PostgresRDSInstance.Endpoint.Address
