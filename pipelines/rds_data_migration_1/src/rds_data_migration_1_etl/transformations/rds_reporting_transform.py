@@ -105,7 +105,7 @@ def populate_account_balance_snapshot(
         )
         .withColumn(
             "current_balance",
-            F.coalesce(F.col("closing_balance"), F.col("current_balance")),
+            F.coalesce(F.col("closing_balance"), F.col("balance")),
         )
         .withColumn(
             "balance_tier",
@@ -297,8 +297,8 @@ def populate_customer_segment_kpi(
         F.count("account_id").alias("total_accounts"),
         F.count(F.when(F.col("status") == "Active", 1)).alias("active_accounts"),
         F.count(F.when(F.col("status").isin("Dormant", "Frozen"), 1)).alias("dormant_accounts"),
-        F.sum("current_balance").alias("total_balance_vnd"),
-        F.avg("current_balance").alias("avg_balance_per_acct"),
+        F.sum("balance").alias("total_balance_vnd"),
+        F.avg("balance").alias("avg_balance_per_acct"),
     ).withColumn(
         "avg_balance_per_cust",
         F.col("total_balance_vnd") / F.when(F.col("total_customers") > 0, F.col("total_customers")).otherwise(1),
@@ -535,7 +535,7 @@ def populate_dormant_watchlist(
             "segment",
             "account_type_code",
             "branch_id",
-            "current_balance",
+            F.col("balance").alias("current_balance"),
             "last_activity_date",
             "days_inactive",
             "dormancy_risk",

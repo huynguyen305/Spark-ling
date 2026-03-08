@@ -1,6 +1,6 @@
 [project]
 name = "rds_data_migration_1"
-version = "0.0.1"
+version = "0.0.3"
 authors = [{ name = "huynguyen30593@outlook.com" }]
 requires-python = ">=3.10,<3.13"
 dependencies = [
