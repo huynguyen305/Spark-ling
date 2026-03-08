@@ -24,7 +24,8 @@ graph TB
 
     subgraph DBX["☁️ Databricks (dbc-cdbdfd07-5797)"]
         SERVERLESS["Serverless Compute\nSpark 4.1.0"]
-        UC["Unity Catalog"]
+        UC["Unity Catalog\ncatalog: sparkling"]
+        DLT["Databricks Live Tables\n(rds_data_migration_1)"]
         CRED["Storage Credential\nIAM Role → S3"]
         EXTLOC["External Location\ns3://sparkling-data-test/"]
         GENSCRIPT["scripts/generate_to_s3.py\n(data generation)"]
@@ -47,7 +48,9 @@ graph TB
     CRED -->|"AssumeRole"| IAM
     UC --> EXTLOC
     EXTLOC -->|"maps to"| S3
-    SERVERLESS -->|"s3a://"| S3
+    SERVERLESS -->|"s3a:// or Unity Catalog"| S3
+    DLT -->|"JDBC Read"| RDS["PostgreSQL RDS\n(Source)"]
+    DLT -->|"Materialized Views\n(Bronze)"| UC
     GENSCRIPT -->|"write Parquet"| S3
     IDE --> MCPSERVER
     MCPSERVER --> MCPDBX

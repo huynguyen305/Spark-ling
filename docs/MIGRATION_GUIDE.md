@@ -30,22 +30,23 @@ Before starting, ensure you have:
 
 ```mermaid
 graph TD
-    subgraph "Day 1: Initial Migration"
-        A["PostgreSQL RDS<br/>(Source Database)"] -->|"JDBC Full Load"| B["S3 Landing Zone<br/>(Parquet)"]
-        B -->|"Delta Write"| C["Bronze<br/>(Raw Delta Tables)"]
-        C -->|"Cleanse & Validate"| D["Silver<br/>(Clean Delta Tables)"]
-        D -->|"Aggregate"| E["Gold<br/>(Business Tables)"]
+    subgraph "Data Extraction & Lakeflow Pipelines"
+        A["PostgreSQL RDS<br/>(Source Database)"] -->|"JDBC Auto-Refresh<br/>(rds_tables.py DLT)"| C["Unity Catalog<br/>Bronze MVs (Raw)"]
+        A -->|"Legacy JDBC Extract"| B["S3 Landing Zone"]
+        B -->|"Delta Write"| C2["Legacy Bronze<br/>(S3 Delta)"]
+        C -->|"Cleanse & Validate"| D["Unity Catalog<br/>Silver Tables"]
+        D -->|"Aggregate"| E["Unity Catalog<br/>Gold Tables"]
     end
 
-    subgraph "Day 2: Daily Operations"
+    subgraph "Daily Operations"
         F["Daily Simulator<br/>(rds_daily_generator.py)"] -->|"New txns + updates"| A
-        A -->|"CDC Watermark"| G["Incremental Extract"]
-        G -->|"Delta MERGE"| C
     end
 
-    subgraph "Databricks"
-        E --> H["SQL Dashboard"]
-        E --> I["MCP Databricks"]
+    subgraph "Databricks Storage"
+        C -.->|"Managed by Unity Catalog"| S3["AWS S3 Bucket<br/>(sparkling-data-test)"]
+        D -.-> S3
+        E -.-> S3
+        E --> H["Databricks SQL Dashboard"]
     end
 ```
 
