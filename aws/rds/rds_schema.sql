@@ -159,10 +159,14 @@ CREATE INDEX IF NOT EXISTS idx_account_cdc ON dim_account(last_modified);
 -- Grain: One row per transaction
 -- Measures: amount (the numeric value we aggregate)
 -- Foreign keys: customer_id, branch_id, account_type_code, txn_date_key
+
+DROP TABLE IF EXISTS fact_transaction CASCADE;
+
 CREATE TABLE IF NOT EXISTS fact_transaction (
     txn_key         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     txn_id          VARCHAR(30) NOT NULL UNIQUE,       -- Business key: TXN20240315000001
     customer_id     VARCHAR(20) NOT NULL,              -- FK to dim_customer (business key)
+    account_id      VARCHAR(20) NOT NULL,              -- FK to dim_account (business key)
     branch_id       VARCHAR(10) NOT NULL,              -- FK to dim_branch
     account_type_code VARCHAR(10) NOT NULL,            -- FK to dim_account_type
     txn_date_key    INTEGER NOT NULL,                  -- FK to dim_date (YYYYMMDD)

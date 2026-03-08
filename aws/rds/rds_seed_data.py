@@ -255,13 +255,14 @@ def generate_accounts(customers: List[Dict], branches: List[Dict]) -> List[Dict]
     return accounts
 
 
-def generate_transactions(customers: List[Dict],
+def generate_transactions(customers: List[Dict], accounts: List[Dict],
                            start_date=date(2024, 1, 1),
                            end_date=date(2025, 12, 31)) -> List[Dict]:
     """Generate transaction fact records."""
     transactions = []
     current = start_date
     txn_counter = 0
+    customer_segments = {c["customer_id"]: c["segment"] for c in customers}
 
     while current <= end_date:
         # Weekday = more transactions
@@ -270,10 +271,11 @@ def generate_transactions(customers: List[Dict],
 
         for _ in range(daily_count):
             txn_counter += 1
-            customer = random.choice(customers)
+            account = random.choice(accounts)
+            customer_id = account["customer_id"]
 
             # Amount varies by segment
-            segment = customer["segment"]
+            segment = customer_segments[customer_id]
             if segment == "Corporate":
                 amount = round(random.uniform(100000000, 5000000000), 2)
             elif segment in ("VIP", "Premium"):
@@ -290,9 +292,10 @@ def generate_transactions(customers: List[Dict],
 
             transactions.append({
                 "txn_id": f"TXN{current.strftime('%Y%m%d')}{txn_counter:07d}",
-                "customer_id": customer["customer_id"],
-                "branch_id": f"BR{random.randint(1, 100):03d}",
-                "account_type_code": random.choice(["SAV", "CHK", "FD", "CRD"]),
+                "customer_id": customer_id,
+                "account_id": account["account_id"],
+                "branch_id": account["branch_id"],
+                "account_type_code": account["account_type_code"],
                 "txn_date_key": date_key,
                 "txn_datetime": datetime(current.year, current.month, current.day,
                                          hour, random.randint(0, 59),
@@ -522,7 +525,7 @@ def run_seed(validate_only: bool = False):
         print(f"   ✅ {len(accounts):,} account records")
 
         print("\n💰 Step 6: Seeding FACT_TRANSACTION (this takes ~60s)...")
-        transactions = generate_transactions(customers)
+        transactions = generate_transactions(customers, accounts)
         batch_insert(conn, "fact_transaction", transactions)
         print(f"   ✅ {len(transactions):,} transaction records")
 

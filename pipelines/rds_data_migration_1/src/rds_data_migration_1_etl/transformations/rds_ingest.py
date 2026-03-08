@@ -1,24 +1,26 @@
+import argparse
 from pyspark.sql import SparkSession
-import os
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--catalog", required=True)
+    parser.add_argument("--schema", required=True)
+    parser.add_argument("--rds-host", required=True)
+    parser.add_argument("--rds-port", required=True)
+    parser.add_argument("--rds-database", required=True)
+    parser.add_argument("--rds-username", required=True)
+    parser.add_argument("--rds-password", required=True)
+    args = parser.parse_args()
+
     spark = SparkSession.builder.getOrCreate()
     
-    # Retrieve Unity Catalog target
-    catalog = os.environ.get("TARGET_CATALOG", "sparkling")
-    schema = os.environ.get("TARGET_SCHEMA", "default")
+    catalog = args.catalog
+    schema = args.schema
     
-    # RDS connection details
-    rds_host = os.environ.get("RDS_HOST")
-    rds_port = os.environ.get("RDS_PORT")
-    rds_database = os.environ.get("RDS_DATABASE")
-    rds_username = os.environ.get("RDS_USERNAME")
-    rds_password = os.environ.get("RDS_PASSWORD")
-
-    jdbc_url = f"jdbc:postgresql://{rds_host}:{rds_port}/{rds_database}"
+    jdbc_url = f"jdbc:postgresql://{args.rds_host}:{args.rds_port}/{args.rds_database}"
     jdbc_properties = {
-        "user": rds_username,
-        "password": rds_password,
+        "user": args.rds_username,
+        "password": args.rds_password,
         "driver": "org.postgresql.Driver"
     }
 

@@ -4,11 +4,7 @@ version = "0.0.1"
 authors = [{ name = "huynguyen30593@outlook.com" }]
 requires-python = ">=3.10,<3.13"
 dependencies = [
-    # Any dependencies for jobs and pipelines in this project can be added here
-    # See also https://docs.databricks.com/dev-tools/bundles/library-dependencies
-    #
-    # LIMITATION: for pipelines, dependencies are cached during development;
-    # add dependencies to the 'environment' section of your pipeline.yml file instead
+    "psycopg2-binary>=2.9.9"
 ]
 
 [dependency-groups]
@@ -21,7 +17,7 @@ dev = [
 ]
 
 [project.scripts]
-main = "rds_data_migration_1.main:main"
+main = "rds_data_migration_1_etl.transformations.rds_ingest:main"
 
 [build-system]
 requires = ["hatchling"]

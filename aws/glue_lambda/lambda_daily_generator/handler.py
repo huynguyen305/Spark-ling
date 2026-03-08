@@ -94,10 +94,14 @@ LAST_NAMES = ["Anh", "Binh", "Chi", "Dung", "Giang", "Hai", "Hung", "Khanh",
 def generate_daily_transactions(conn, sim_date: date) -> List[Dict]:
     """Generate ~5,000 transactions for a given day."""
     cursor = conn.cursor()
-    cursor.execute("SELECT customer_id, segment FROM dim_customer WHERE is_current = TRUE")
-    customers = [{"customer_id": r[0], "segment": r[1]} for r in cursor.fetchall()]
+    cursor.execute(
+        "SELECT a.account_id, a.customer_id, a.branch_id, a.account_type_code, c.segment "
+        "FROM dim_account a JOIN dim_customer c ON a.customer_id = c.customer_id "
+        "WHERE c.is_current = TRUE"
+    )
+    accounts = [{"account_id": r[0], "customer_id": r[1], "branch_id": r[2], "account_type_code": r[3], "segment": r[4]} for r in cursor.fetchall()]
 
-    if not customers:
+    if not accounts:
         return []
 
     is_weekday = sim_date.isoweekday() <= 5
@@ -110,8 +114,8 @@ def generate_daily_transactions(conn, sim_date: date) -> List[Dict]:
 
     transactions = []
     for i in range(daily_count):
-        customer = random.choice(customers)
-        segment = customer["segment"]
+        account = random.choice(accounts)
+        segment = account["segment"]
 
         if segment == "Corporate":
             amount = round(random.uniform(100000000, 5000000000), 2)
@@ -127,9 +131,10 @@ def generate_daily_transactions(conn, sim_date: date) -> List[Dict]:
 
         transactions.append({
             "txn_id": f"TXN{sim_date.strftime('%Y%m%d')}{base_counter + i + 1:07d}",
-            "customer_id": customer["customer_id"],
-            "branch_id": f"BR{random.randint(1, 100):03d}",
-            "account_type_code": random.choice(["SAV", "CHK", "FD", "CRD"]),
+            "customer_id": account["customer_id"],
+            "account_id": account["account_id"],
+            "branch_id": account["branch_id"],
+            "account_type_code": account["account_type_code"],
             "txn_date_key": date_key,
             "txn_datetime": datetime(sim_date.year, sim_date.month, sim_date.day,
                                      hour, random.randint(0, 59), random.randint(0, 59)),
@@ -216,6 +221,37 @@ def update_customers(conn, sim_date: date, count: int = 200) -> int:
     return updated
 
 
+def update_accounts_balances(conn, sim_date: date, count: int = 500) -> int:
+    """Simulate account balance and activity updates."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT account_id, balance FROM dim_account "
+        "WHERE status = 'Active' ORDER BY RANDOM() LIMIT %s", (count,)
+    )
+    accounts = cursor.fetchall()
+
+    updated = 0
+    for acc in accounts:
+        aid, balance = acc
+        change = round(random.uniform(-float(balance) * 0.05, float(balance) * 0.05), 2)
+        new_balance = max(0.0, float(balance) + change)
+        
+        try:
+            cursor.execute(
+                "UPDATE dim_account SET balance = %s, last_activity_date = %s, "
+                "last_modified = CURRENT_TIMESTAMP WHERE account_id = %s",
+                (new_balance, sim_date, aid)
+            )
+            updated += 1
+        except Exception as e:
+            conn.rollback()
+            print(f"Error updating account {aid}: {e}")
+            continue
+
+    conn.commit()
+    return updated
+
+
 def batch_insert(conn, table: str, data: List[Dict], batch_size: int = 5000) -> int:
     """Bulk insert using psycopg2 execute_values."""
     if not data:
@@ -240,7 +276,7 @@ def batch_insert(conn, table: str, data: List[Dict], batch_size: int = 5000) -> 
 def update_cdc_watermarks(conn, sim_date: date):
     """Update CDC watermark table so the incremental pipeline picks up new data."""
     cursor = conn.cursor()
-    tables = ["dim_customer", "fact_transaction", "fact_daily_balance"]
+    tables = ["dim_customer", "dim_account", "fact_transaction", "fact_daily_balance"]
     for table in tables:
         cursor.execute(f"SELECT COUNT(*) FROM {table}")
         count = cursor.fetchone()[0]
@@ -293,6 +329,11 @@ def lambda_handler(event, context):
         cust_updates = update_customers(conn, sim_date, count=200)
         print(f"   ✅ {cust_updates} customer updates (SCD Type 2)")
 
+        # 2.5 Update account balances
+        print("\n👤 Updating account balances...")
+        acc_updates = update_accounts_balances(conn, sim_date, count=500)
+        print(f"   ✅ {acc_updates} account updates")
+
         # 3. Update CDC watermarks
         print("\n📌 Updating CDC watermarks...")
         update_cdc_watermarks(conn, sim_date)
@@ -304,6 +345,7 @@ def lambda_handler(event, context):
             "simulate_date": str(sim_date),
             "transactions_inserted": txn_count,
             "customer_updates": cust_updates,
+            "account_updates": acc_updates,
             "timestamp": datetime.now().isoformat(),
         }
         print(f"\n✅ Daily simulation complete: {json.dumps(result)}")

@@ -65,11 +65,15 @@ def generate_daily_transactions(conn, simulate_date: date) -> List[Dict]:
     - Low hours: midnight–6am
     """
     cursor = conn.cursor()
-    cursor.execute("SELECT customer_id, segment FROM dim_customer WHERE is_current = TRUE")
-    customers = cursor.fetchall()
+    cursor.execute(
+        "SELECT a.account_id, a.customer_id, a.branch_id, a.account_type_code, c.segment "
+        "FROM dim_account a JOIN dim_customer c ON a.customer_id = c.customer_id "
+        "WHERE c.is_current = TRUE"
+    )
+    accounts = cursor.fetchall()
 
-    if not customers:
-        print("   ⚠️  No customers found")
+    if not accounts:
+        print("   ⚠️  No accounts found")
         return []
 
     is_weekday = simulate_date.isoweekday() <= 5
@@ -78,7 +82,7 @@ def generate_daily_transactions(conn, simulate_date: date) -> List[Dict]:
 
     transactions = []
     for i in range(daily_count):
-        cust_id, segment = random.choice(customers)
+        acc_id, cust_id, branch_id, acc_type, segment = random.choice(accounts)
 
         # Amount varies by segment
         if segment == "Corporate":
@@ -98,8 +102,9 @@ def generate_daily_transactions(conn, simulate_date: date) -> List[Dict]:
         transactions.append({
             "txn_id": f"TXN{simulate_date.strftime('%Y%m%d')}{i+1:07d}",
             "customer_id": cust_id,
-            "branch_id": f"BR{random.randint(1, 100):03d}",
-            "account_type_code": random.choice(["SAV", "CHK", "FD", "CRD"]),
+            "account_id": acc_id,
+            "branch_id": branch_id,
+            "account_type_code": acc_type,
             "txn_date_key": date_key,
             "txn_datetime": datetime(simulate_date.year, simulate_date.month,
                                      simulate_date.day, hour,
