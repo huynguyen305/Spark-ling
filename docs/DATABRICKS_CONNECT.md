@@ -211,3 +211,84 @@ echo 'source ~/sparking_repo/Spark-ling/.venv/bin/activate' >> ~/.bashrc
 | Token expired | Generate a new token in Databricks → Settings → Developer → Access tokens |
 | `s3a://` path not found | Ensure External Location exists in Databricks Unity Catalog; run `scripts/generate_to_s3.py` first |
 | Connection timeout | Serverless compute may be starting up — wait 30–60s and retry |
+
+---
+
+## RDS → Unity Catalog Pipeline (Databricks Asset Bundle)
+
+The primary migration path is a **Databricks Asset Bundle** in `pipelines/rds_data_migration_1/`.
+It packages Python jobs as a wheel and deploys two scheduled Databricks Jobs.
+
+### Architecture
+
+```mermaid
+graph LR
+    subgraph RDS["🐘 PostgreSQL RDS (ap-southeast-1)"]
+        SRC["dim_customer, dim_account\nfact_transaction, fact_daily_balance\n+ reporting tables"]
+    end
+
+    subgraph DBX["☁️ Databricks"]
+        SPARK["Serverless Compute\n(Spark via DAB job)"]
+        UC["Unity Catalog\nsparkling.prod.*"]
+    end
+
+    SRC -->|"JDBC full load\n(rds_data_migration_1_job)"| SPARK
+    SRC -->|"JDBC incremental CDC\n(rds_daily_job)"| SPARK
+    SPARK -->|"Delta write/merge"| UC
+    UC -->|"Reporting transforms\n(rds_reporting_transform.py)"| UC
+```
+
+### Job structure
+
+| Job | Schedule | Purpose |
+|-----|----------|---------|
+| `rds_data_migration_1_job` | Run once | Full load of all 7 RDS tables → Unity Catalog Delta |
+| `rds_daily_job` | Daily 02:00 UTC | Incremental CDC + reporting transformations |
+
+The daily job has two tasks in sequence:
+
+```
+rds_incremental_task  →  rds_reporting_task
+(CDC watermark load)      (PySpark SP migration)
+```
+
+### Deploy in 3 commands
+
+```bash
+cd pipelines/rds_data_migration_1
+
+# 1) Store RDS credentials securely (once)
+databricks secrets create-scope sparkling
+databricks secrets put-secret sparkling rds_host     --string-value "<endpoint>"
+databricks secrets put-secret sparkling rds_username --string-value "sparkadmin"
+databricks secrets put-secret sparkling rds_password --string-value "<password>"
+
+# 2) Deploy the bundle
+databricks bundle deploy --target prod
+
+# 3) Run the one-time full load
+databricks bundle run rds_data_migration_1_job --target prod
+
+# The daily job runs automatically; trigger manually if needed:
+databricks bundle run rds_daily_job --target prod
+```
+
+### File map
+
+```
+pipelines/rds_data_migration_1/
+├── databricks.yml                              Bundle manifest (catalog, targets)
+├── pyproject.toml                              Python package + entry points
+├── resources/
+│   ├── rds_data_migration_1_job.yml            Full load job definition
+│   └── rds_daily_job.yml                       Daily incremental + reporting job
+└── src/rds_data_migration_1_etl/transformations/
+    ├── rds_ingest.py                           Full load (all tables → UC)
+    ├── rds_incremental.py                      Incremental CDC (watermark-based)
+    └── rds_reporting_transform.py              PySpark migration of 5 PostgreSQL SPs
+```
+
+### Interactive exploration
+
+Open `notebooks/12_rds_to_databricks_pipeline.ipynb` to walk through the same
+pipeline interactively with Databricks Connect before promoting to a scheduled job.

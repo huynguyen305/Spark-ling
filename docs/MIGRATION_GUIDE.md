@@ -7,6 +7,66 @@
 > to save on licensing costs — so this is a very realistic scenario! The pipeline concepts
 > (JDBC extraction, CDC, Medallion architecture) are identical regardless of source database.
 
+## Recommended Approach: Databricks Asset Bundle
+
+> [!IMPORTANT]
+> The **primary production path** for this migration is the Databricks Asset Bundle in
+> `pipelines/rds_data_migration_1/`. It packages all pipeline code as a Python wheel
+> and deploys scheduled Databricks Jobs to Unity Catalog.
+>
+> The manual Python scripts described in Day 1/Day 2 below are retained for **learning purposes**
+> only. For actual deployments, use the Asset Bundle.
+
+### Quick start with the Asset Bundle
+
+```bash
+cd pipelines/rds_data_migration_1
+
+# 1) Store RDS credentials in Databricks secret scope
+databricks secrets create-scope sparkling
+databricks secrets put-secret sparkling rds_host     --string-value "<endpoint>"
+databricks secrets put-secret sparkling rds_username --string-value "sparkadmin"
+databricks secrets put-secret sparkling rds_password --string-value "<password>"
+
+# 2) Deploy jobs to Databricks workspace
+databricks bundle deploy --target prod
+
+# 3) Run the one-time full load (bootstraps Unity Catalog tables)
+databricks bundle run rds_data_migration_1_job --target prod
+
+# 4) Daily incremental CDC + reporting runs automatically at 02:00 UTC
+#    Trigger manually if needed:
+databricks bundle run rds_daily_job --target prod
+```
+
+### Job structure
+
+| Job | When to run | Tasks |
+|-----|-------------|-------|
+| `rds_data_migration_1_job` | Once (initial bootstrap) | Full JDBC load of 7 RDS tables → Unity Catalog |
+| `rds_daily_job` | Daily (02:00 UTC) | `rds_incremental_task` → `rds_reporting_task` |
+
+The daily job task chain:
+- **rds_incremental_task**: Reads new/changed rows via CDC watermarks; merges into Unity Catalog Delta tables
+- **rds_reporting_task**: Runs 5 PySpark reporting transformations (migrated from PostgreSQL stored procedures)
+
+### Reporting tables (migrated from PostgreSQL stored procedures)
+
+| Reporting Table | PostgreSQL SP | Purpose |
+|-----------------|--------------|---------|
+| `rpt_monthly_txn_summary` | `sp_populate_rpt_monthly_txn_summary` | Monthly volume per customer/type |
+| `rpt_account_balance_snapshot` | `sp_populate_rpt_account_balance_snapshot` | End-of-day balances with VND tiering |
+| `rpt_customer_segment_kpi` | `sp_populate_rpt_customer_segment_kpi` | Segment KPIs for management |
+| `rpt_channel_analysis` | `sp_populate_rpt_channel_analysis` | Digital vs traditional channel mix |
+| `rpt_dormant_watchlist` | `sp_populate_rpt_dormant_watchlist` | Inactive accounts (SBV compliance) |
+
+### Interactive exploration
+
+Open `notebooks/12_rds_to_databricks_pipeline.ipynb` to walk through the pipeline
+interactively using Databricks Connect before running it as a scheduled job.
+
+---
+
 ## Prerequisites
 
 Before starting, ensure you have:
@@ -30,12 +90,10 @@ Before starting, ensure you have:
 
 ```mermaid
 graph TD
-    subgraph "Data Extraction & Lakeflow Pipelines"
-        A["PostgreSQL RDS<br/>(Source Database)"] -->|"JDBC Auto-Refresh<br/>(rds_tables.py DLT)"| C["Unity Catalog<br/>Bronze MVs (Raw)"]
-        A -->|"Legacy JDBC Extract"| B["S3 Landing Zone"]
-        B -->|"Delta Write"| C2["Legacy Bronze<br/>(S3 Delta)"]
-        C -->|"Cleanse & Validate"| D["Unity Catalog<br/>Silver Tables"]
-        D -->|"Aggregate"| E["Unity Catalog<br/>Gold Tables"]
+    subgraph "Data Extraction — Databricks Asset Bundle (primary)"
+        A["PostgreSQL RDS<br/>(Source Database)"] -->|"JDBC Full Load<br/>(rds_data_migration_1_job)"| UC["Unity Catalog<br/>sparkling.prod.*<br/>(Delta Tables)"]
+        A -->|"JDBC Incremental CDC<br/>(rds_daily_job)"| UC
+        UC -->|"Reporting Transforms<br/>(rds_reporting_transform.py)"| RPT["Unity Catalog<br/>rpt_* reporting tables"]
     end
 
     subgraph "Daily Operations"
@@ -43,10 +101,9 @@ graph TD
     end
 
     subgraph "Databricks Storage"
-        C -.->|"Managed by Unity Catalog"| S3["AWS S3 Bucket<br/>(sparkling-data-test)"]
-        D -.-> S3
-        E -.-> S3
-        E --> H["Databricks SQL Dashboard"]
+        UC -.->|"Managed by Unity Catalog"| S3["AWS S3 Bucket<br/>(sparkling-data-test)"]
+        RPT -.-> S3
+        RPT --> H["Databricks SQL Dashboard"]
     end
 ```
 
