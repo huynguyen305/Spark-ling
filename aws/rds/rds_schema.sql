@@ -129,6 +129,28 @@ CREATE INDEX IF NOT EXISTS idx_customer_cdc ON dim_customer(last_modified);
 
 
 -- ============================================================================
+-- DIM_ACCOUNT: Account Dimension
+-- ============================================================================
+-- LEARNING: Stores account details bridging customers and transactions.
+CREATE TABLE IF NOT EXISTS dim_account (
+    account_key       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    account_id        VARCHAR(20) NOT NULL UNIQUE,       -- Business key: ACCT000001
+    customer_id       VARCHAR(20) NOT NULL,              -- FK to dim_customer (business key)
+    branch_id         VARCHAR(10) NOT NULL,              -- FK to dim_branch (business key)
+    account_type_code VARCHAR(10) NOT NULL,              -- FK to dim_account_type (business key)
+    balance           NUMERIC(18,2) NOT NULL,
+    currency          VARCHAR(3) DEFAULT 'VND',
+    status            VARCHAR(20) DEFAULT 'Active',      -- Active, Dormant, Closed, Frozen
+    opened_date       DATE NOT NULL,
+    last_activity_date DATE NOT NULL,
+    last_modified     TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_customer ON dim_account(customer_id);
+CREATE INDEX IF NOT EXISTS idx_account_cdc ON dim_account(last_modified);
+
+
+-- ============================================================================
 -- FACT_TRANSACTION: Banking Transaction Fact Table
 -- ============================================================================
 -- LEARNING: The fact table is the heart of the data warehouse.
@@ -205,6 +227,7 @@ CREATE TABLE IF NOT EXISTS cdc_watermark (
 -- Seed initial watermark values
 INSERT INTO cdc_watermark (table_name, last_watermark) VALUES
     ('dim_customer', '2020-01-01 00:00:00'),
+    ('dim_account', '2020-01-01 00:00:00'),
     ('fact_transaction', '2020-01-01 00:00:00'),
     ('fact_daily_balance', '2020-01-01 00:00:00'),
     ('dim_branch', '2020-01-01 00:00:00'),

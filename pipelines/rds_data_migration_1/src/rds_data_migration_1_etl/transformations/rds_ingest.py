@@ -27,6 +27,7 @@ def main():
         "dim_branch",
         "dim_account_type",
         "dim_customer",
+        "dim_account",
         "fact_transaction",
         "fact_daily_balance"
     ]

@@ -210,6 +210,51 @@ def generate_customers(count=10000) -> List[Dict]:
     return customers
 
 
+def generate_accounts(customers: List[Dict], branches: List[Dict]) -> List[Dict]:
+    """Generate account dimension records based on the S3 generation logic."""
+    customer_segments = {c["customer_id"]: c["segment"] for c in customers}
+    branch_ids = [b["branch_id"] for b in branches]
+
+    # Map S3 segments to RDS segments
+    BALANCE_RANGES = {
+        "Corporate":     (5_000_000_000, 50_000_000_000), # Equivalent to UHNW
+        "VIP":           (500_000_000,   5_000_000_000),  # Equivalent to HNW
+        "Premium":       (100_000_000,   500_000_000),    # Equivalent to Affluent
+        "Affluent":      (20_000_000,    100_000_000),    # Equivalent to Mass Affluent
+        "Mass":          (100_000,       20_000_000),     # Equivalent to Mass
+    }
+    
+    ACCOUNT_STATUSES = ["Active", "Dormant", "Closed", "Frozen"]
+    account_type_codes = [at[0] for at in ACCOUNT_TYPES]
+
+    accounts = []
+    acct_num = 1
+    for cust_id, segment in customer_segments.items():
+        num_accounts = random.choices([1, 2, 3], weights=[0.5, 0.35, 0.15])[0]
+        lo, hi = BALANCE_RANGES.get(segment, (100000, 20000000))
+
+        for _ in range(num_accounts):
+            balance = round(random.uniform(lo, hi), 2)
+            
+            opened_date = date(random.randint(2018, 2024), random.randint(1, 12), random.randint(1, 28))
+            last_activity = date(random.randint(2024, 2025), random.randint(1, 12), random.randint(1, 28))
+
+            accounts.append({
+                "account_id": f"ACCT{acct_num:06d}",
+                "customer_id": cust_id,
+                "branch_id": random.choice(branch_ids),
+                "account_type_code": random.choice(account_type_codes),
+                "balance": balance,
+                "currency": "VND",
+                "status": random.choices(ACCOUNT_STATUSES, weights=[0.85, 0.08, 0.05, 0.02])[0],
+                "opened_date": opened_date,
+                "last_activity_date": last_activity,
+            })
+            acct_num += 1
+
+    return accounts
+
+
 def generate_transactions(customers: List[Dict],
                            start_date=date(2024, 1, 1),
                            end_date=date(2025, 12, 31)) -> List[Dict]:
@@ -392,7 +437,7 @@ def validate_tables(conn) -> dict:
     """Check row counts for all tables."""
     cursor = conn.cursor()
     tables = ["dim_date", "dim_branch", "dim_account_type", "dim_customer",
-              "fact_transaction", "fact_daily_balance", "cdc_watermark"]
+              "dim_account", "fact_transaction", "fact_daily_balance", "cdc_watermark"]
 
     counts = {}
     for table in tables:
@@ -470,6 +515,11 @@ def run_seed(validate_only: bool = False):
         customers = generate_customers(10000)
         batch_insert(conn, "dim_customer", customers)
         print(f"   ✅ {len(customers):,} customer records")
+
+        print("\n🏧 Step 5.5: Seeding DIM_ACCOUNT...")
+        accounts = generate_accounts(customers, branches)
+        batch_insert(conn, "dim_account", accounts)
+        print(f"   ✅ {len(accounts):,} account records")
 
         print("\n💰 Step 6: Seeding FACT_TRANSACTION (this takes ~60s)...")
         transactions = generate_transactions(customers)
