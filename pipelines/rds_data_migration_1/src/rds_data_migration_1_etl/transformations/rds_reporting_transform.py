@@ -35,7 +35,7 @@ Usage (direct):
 
 import argparse
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
@@ -171,12 +171,9 @@ def populate_monthly_txn_summary(
     year = report_month // 100
     month = report_month % 100
     start_date = f"{year}-{month:02d}-01"
-    # Last day of month
-    end_date = (
-        datetime(year, month, 1).__class__(
-            year + (month // 12), (month % 12) + 1, 1
-        ) - __import__("datetime").timedelta(days=1)
-    ).strftime("%Y-%m-%d")
+    # Last day of month: first day of next month minus one day
+    next_month_first = datetime(year + (month // 12), (month % 12) + 1, 1)
+    end_date = (next_month_first - timedelta(days=1)).strftime("%Y-%m-%d")
 
     fact_txn = spark.table(_fq(catalog, schema, "fact_transaction"))
     dim_customer = spark.table(_fq(catalog, schema, "dim_customer")).filter(F.col("is_current") == True)
@@ -285,10 +282,7 @@ def populate_customer_segment_kpi(
     year = report_month // 100
     month = report_month % 100
     start_date = f"{year}-{month:02d}-01"
-    end_date_plus1 = (
-        datetime(year + (month // 12), (month % 12) + 1, 1)
-        .strftime("%Y-%m-%d")
-    )
+    end_date_plus1 = datetime(year + (month // 12), (month % 12) + 1, 1).strftime("%Y-%m-%d")
 
     dim_customer = spark.table(_fq(catalog, schema, "dim_customer")).filter(F.col("is_current") == True)
     dim_account = spark.table(_fq(catalog, schema, "dim_account")).filter(F.col("status") != "Closed")
@@ -395,10 +389,7 @@ def populate_channel_analysis(
     year = report_month // 100
     month = report_month % 100
     start_date = f"{year}-{month:02d}-01"
-    end_date_plus1 = (
-        datetime(year + (month // 12), (month % 12) + 1, 1)
-        .strftime("%Y-%m-%d")
-    )
+    end_date_plus1 = datetime(year + (month // 12), (month % 12) + 1, 1).strftime("%Y-%m-%d")
 
     fact_txn = spark.table(_fq(catalog, schema, "fact_transaction"))
     txn_in_month = fact_txn.filter(
