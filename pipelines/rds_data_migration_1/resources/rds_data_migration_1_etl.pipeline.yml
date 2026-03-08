@@ -1,0 +1,20 @@
+# The main pipeline for rds_data_migration_1
+
+resources:
+  pipelines:
+    rds_data_migration_1_etl:
+      name: rds_data_migration_1_etl
+      catalog: ${var.catalog}
+      schema: ${var.schema}
+      serverless: true
+      root_path: "../src/rds_data_migration_1_etl"
+
+      libraries:
+        - glob:
+            include: ../src/rds_data_migration_1_etl/transformations/**
+
+      environment:
+        dependencies:
+          # We include every dependency defined by pyproject.toml by defining an editable environment
+          # that points to the folder where pyproject.toml is deployed.
+          - --editable ${workspace.file_path}
