@@ -1,0 +1,90 @@
+# Daily Databricks Job: RDS Incremental Load → Reporting Transformations
+#
+# This job runs every day AFTER the initial full load (rds_data_migration_1_job)
+# has completed at least once.
+#
+# Task dependency chain:
+#   rds_incremental_task  →  rds_reporting_task
+#
+#   1. rds_incremental_task  : Reads new/changed rows from PostgreSQL RDS
+#                              and merges them into Unity Catalog Delta tables.
+#   2. rds_reporting_task    : Runs PySpark reporting transformations
+#                              (migrated from PostgreSQL stored procedures).
+#
+# Schedule: Daily at 02:00 UTC (09:00 ICT) — runs after nightly ETL on RDS.
+# Deploy  : databricks bundle deploy --target prod
+# Run now : databricks bundle run rds_daily_job --target prod
+
+resources:
+  jobs:
+    rds_daily_job:
+      name: rds_daily_job
+
+      # ── Schedule ──────────────────────────────────────────────────────────
+      trigger:
+        pause_status: UNPAUSED
+        periodic:
+          interval: 1
+          unit: DAYS
+
+      # ── Email notifications ───────────────────────────────────────────────
+      email_notifications:
+        on_failure:
+          - huynguyen30593@outlook.com
+
+      # ── Tasks ─────────────────────────────────────────────────────────────
+      tasks:
+        # ── Task 1: Incremental CDC load (RDS → Unity Catalog) ─────────────
+        - task_key: rds_incremental_task
+          description: >
+            Reads new/changed rows from PostgreSQL RDS via JDBC (using
+            last_modified watermarks) and merges them into Unity Catalog
+            Delta tables: dim_customer, dim_account, fact_transaction,
+            fact_daily_balance.
+          python_wheel_task:
+            package_name: rds_data_migration_1
+            entry_point: incremental
+            parameters:
+              - "--catalog"
+              - ${var.catalog}
+              - "--schema"
+              - ${var.schema}
+              - "--rds-host"
+              - "{{secrets/sparkling/rds_host}}"
+              - "--rds-port"
+              - "5432"
+              - "--rds-database"
+              - "sparkdb"
+              - "--rds-username"
+              - "{{secrets/sparkling/rds_username}}"
+              - "--rds-password"
+              - "{{secrets/sparkling/rds_password}}"
+          environment_key: default
+
+        # ── Task 2: Reporting transformations (stored procedure migration) ──
+        - task_key: rds_reporting_task
+          description: >
+            Runs PySpark equivalents of the 5 PostgreSQL stored procedures
+            (sp_populate_rpt_*) to refresh reporting tables:
+            rpt_monthly_txn_summary, rpt_account_balance_snapshot,
+            rpt_customer_segment_kpi, rpt_channel_analysis,
+            rpt_dormant_watchlist.
+          depends_on:
+            - task_key: rds_incremental_task
+          python_wheel_task:
+            package_name: rds_data_migration_1
+            entry_point: reporting
+            parameters:
+              - "--catalog"
+              - ${var.catalog}
+              - "--schema"
+              - ${var.schema}
+          environment_key: default
+
+      # ── Shared environment ────────────────────────────────────────────────
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "2"
+            dependencies:
+              - whl: ../dist/*.whl

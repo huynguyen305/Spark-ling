@@ -1,4 +1,17 @@
-# The Job definition for the Ingest to Lakehouse strategy of rds_data_migration_1
+# Full Load Job: One-time initial migration of all RDS tables → Unity Catalog
+#
+# Run this ONCE to bootstrap the Unity Catalog tables from PostgreSQL RDS.
+# After the initial load, use rds_daily_job for incremental CDC updates.
+#
+# RDS credentials are read from a Databricks secret scope named "sparkling".
+# Create the scope and secrets before deploying:
+#   databricks secrets create-scope sparkling
+#   databricks secrets put-secret sparkling rds_host     --string-value "<endpoint>"
+#   databricks secrets put-secret sparkling rds_username --string-value "sparkadmin"
+#   databricks secrets put-secret sparkling rds_password --string-value "<password>"
+#
+# Deploy : databricks bundle deploy --target prod
+# Run    : databricks bundle run rds_data_migration_1_job --target prod
 
 resources:
   jobs:
@@ -6,6 +19,11 @@ resources:
       name: rds_data_migration_1_job
       tasks:
         - task_key: rds_ingest_task
+          description: >
+            Full load of all RDS tables (dim_date, dim_branch, dim_account_type,
+            dim_customer, dim_account, fact_transaction, fact_daily_balance)
+            into Unity Catalog Delta tables. Run once to bootstrap; then use
+            rds_daily_job for daily incremental loads.
           python_wheel_task:
             package_name: rds_data_migration_1
             entry_point: main
@@ -15,21 +33,19 @@ resources:
               - "--schema"
               - ${var.schema}
               - "--rds-host"
-              - "sparkling-postgres-db.c3oweiuwo3lj.ap-southeast-1.rds.amazonaws.com"
+              - "{{secrets/sparkling/rds_host}}"
               - "--rds-port"
               - "5432"
               - "--rds-database"
               - "sparkdb"
               - "--rds-username"
-              - "sparkadmin"
+              - "{{secrets/sparkling/rds_username}}"
               - "--rds-password"
-              - "SparkLing2026!"
+              - "{{secrets/sparkling/rds_password}}"
           environment_key: default
       environments:
         - environment_key: default
           spec:
             environment_version: "2"
             dependencies:
-              - pypi:
-                  package: psycopg2-binary==2.9.9
               - whl: ../dist/*.whl

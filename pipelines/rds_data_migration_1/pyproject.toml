@@ -17,7 +17,9 @@ dev = [
 ]
 
 [project.scripts]
-main = "rds_data_migration_1_etl.transformations.rds_ingest:main"
+main        = "rds_data_migration_1_etl.transformations.rds_ingest:main"
+incremental = "rds_data_migration_1_etl.transformations.rds_incremental:main"
+reporting   = "rds_data_migration_1_etl.transformations.rds_reporting_transform:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -4,6 +4,18 @@ Use the **Model Context Protocol (MCP)** to let AI assistants (Claude, Gemini, e
 
 ---
 
+## Two MCP server options
+
+| Server | Compute | Best for |
+|--------|---------|----------|
+| [`mcp_databricks_connect/`](#option-a--mcp-with-databricks-connect-recommended) | Databricks serverless (gRPC) | **Unity Catalog tables** after RDS migration; full Spark DataFrame API |
+| [`mcp/`](#option-b--mcp-with-athena--s3--sql-warehouse) | Athena / S3 / SQL warehouse | S3 Parquet data; cost-effective exploration |
+
+> **Recommendation**: Use `mcp_databricks_connect/` when your data is in Unity Catalog
+> (post-migration). Use `mcp/` for Athena or S3-backed data exploration.
+
+---
+
 ## What is MCP?
 
 MCP allows AI coding assistants to access external data through a standardized protocol. The Spark-ling MCP server exposes your banking data as callable tools.
@@ -13,7 +25,7 @@ sequenceDiagram
     participant You as You (IDE)
     participant AI as AI Assistant
     participant MCP as MCP Server
-    participant Data as Athena / Databricks / S3
+    participant Data as Databricks / Athena / S3
 
     You->>AI: "What's the customer segment distribution?"
     AI->>MCP: call list_tables()
@@ -29,7 +41,104 @@ sequenceDiagram
 
 ---
 
-## Quick Setup (Local — stdio transport)
+## Option A — MCP with Databricks Connect (Recommended)
+
+Backed by **Databricks Connect (gRPC)** — gives AI assistants full Spark computing
+power on remote serverless compute.  Supports SQL *and* the full DataFrame API.
+
+### Setup
+
+```bash
+# 1) Install dependencies
+source ~/sparking_repo/Spark-ling/.venv/bin/activate
+pip install -r mcp_databricks_connect/requirements.txt
+
+# 2) Configure credentials
+cp mcp_databricks_connect/.env.example mcp_databricks_connect/.env
+# Edit .env — set DATABRICKS_HOST and DATABRICKS_TOKEN
+```
+
+`mcp_databricks_connect/.env`:
+
+```env
+DATABRICKS_HOST=https://dbc-cdbdfd07-5797.cloud.databricks.com
+DATABRICKS_TOKEN=dapi...your-personal-access-token...
+
+# Unity Catalog defaults (tables migrated from RDS)
+DATABRICKS_CATALOG=sparkling
+DATABRICKS_SCHEMA=banking
+
+MCP_TRANSPORT=stdio
+MCP_PORT=8081
+MCP_SERVER_NAME=sparkling-spark-engine
+```
+
+### Test locally
+
+```bash
+python mcp_databricks_connect/server.py
+# Expected: "Starting sparkling-spark-engine MCP server (transport=stdio)..."
+```
+
+### Connect to VS Code (`.vscode/mcp.json`)
+
+```json
+{
+  "servers": {
+    "sparkling-spark-engine": {
+      "command": "/home/huynguyenle/sparking_repo/Spark-ling/.venv/bin/python",
+      "args": ["mcp_databricks_connect/server.py"],
+      "cwd": "/home/huynguyenle/sparking_repo/Spark-ling"
+    }
+  }
+}
+```
+
+### Connect to Cursor / Gemini
+
+```json
+{
+  "mcpServers": {
+    "sparkling-spark-engine": {
+      "command": "/home/huynguyenle/sparking_repo/Spark-ling/.venv/bin/python",
+      "args": ["mcp_databricks_connect/server.py"],
+      "cwd": "/home/huynguyenle/sparking_repo/Spark-ling"
+    }
+  }
+}
+```
+
+### Extra tools (Databricks Connect MCP)
+
+In addition to the standard `list_tables`, `describe_table`, `sample_data`, `query_sql` tools,
+the Databricks Connect MCP exposes:
+
+| Tool | Description |
+|------|-------------|
+| `dataframe_operation` | filter / groupby_agg / orderby / select / corr — full DataFrame API |
+| `read_s3_path` | Ad-hoc Parquet / CSV / JSON / Delta reads from S3 |
+| `explain_sql` | Show Spark execution plan (for query tuning) |
+| `cache_table` / `uncache_table` | Cache hot tables for faster repeated queries |
+| `list_catalogs` / `list_schemas` | Explore Unity Catalog hierarchy |
+| `spark_session_info` | Show active Spark session details |
+
+### Architecture
+
+```mermaid
+graph LR
+    IDE["VS Code / Cursor / Gemini"] -->|"stdio"| MCP["mcp_databricks_connect/server.py\n(FastMCP + Databricks Connect)"]
+    MCP -->|"gRPC (Databricks Connect)"| SPARK["Databricks Serverless\nSpark 4.1.0"]
+    SPARK -->|"Unity Catalog"| UC["sparkling.banking.*\n(rpt_* reporting tables)"]
+    SPARK -->|"s3a://"| S3["S3 Bucket\nsparkling-data-test"]
+```
+
+---
+
+## Option B — MCP with Athena / S3 / SQL warehouse
+
+The original MCP server (`mcp/`) supports multiple backends via configuration.
+
+### Quick Setup (Local — stdio transport)
 
 ### Step 1 — Install MCP dependencies
 
@@ -140,6 +249,8 @@ In Cursor → Settings → MCP:
 
 ## Available Tools
 
+### Standard tools (both MCP servers)
+
 | Tool | Description | Example Prompt |
 |------|-------------|----------------|
 | `list_tables` | List all datasets | *"What tables are available?"* |
@@ -148,6 +259,17 @@ In Cursor → Settings → MCP:
 | `query_sql` | Run read-only SQL | *"How many transactions per month?"* |
 | `get_data_profile` | Stats: nulls, distinct counts | *"Profile the accounts table"* |
 | `server_status` | Check backend, transport & health | *"Is the MCP server healthy?"* |
+
+### Additional tools (mcp_databricks_connect only)
+
+| Tool | Description |
+|------|-------------|
+| `dataframe_operation` | PySpark operations: filter, groupby_agg, orderby, select, corr |
+| `read_s3_path` | Ad-hoc Parquet/CSV/JSON/Delta reads from S3 |
+| `explain_sql` | Show Spark execution plan (simple / extended / cost / formatted) |
+| `cache_table` / `uncache_table` | Cache hot tables for repeated queries |
+| `list_catalogs` / `list_schemas` | Explore Unity Catalog hierarchy |
+| `spark_session_info` | Active session details |
 
 ### Example Conversations
 
@@ -160,12 +282,15 @@ In Cursor → Settings → MCP:
 > **You**: *"Are there data quality issues in transactions?"*
 > **AI** → `get_data_profile("transactions")` → analyzes nulls and distributions
 
+> **You** (Databricks Connect MCP): *"Show me the monthly trend in digital channel share"*
+> **AI** → `query_sql("SELECT report_month, SUM(pct_of_total_txns) FROM rpt_channel_analysis WHERE digital_flag=true GROUP BY 1 ORDER BY 1")`
+
 ---
 
 ## MCP Server Architecture
 
 ```
-mcp/
+mcp/                           (Option B: multi-backend)
 ├── server.py              # FastMCP entry point; handles tool routing
 ├── config.py              # Reads mcp/.env, selects backend & transport
 ├── auth.py                # API key authentication for remote deployments
@@ -178,9 +303,16 @@ mcp/
 ├── deploy_ec2.sh          # Deploy to EC2 (Python or Docker mode)
 ├── .env.example           # Config template → copy to .env
 └── requirements.txt       # mcp[cli], boto3, databricks-sql-connector, etc.
+
+mcp_databricks_connect/        (Option A: Databricks Connect — recommended)
+├── server.py              # FastMCP entry point; Databricks Connect backend
+├── config.py              # Reads .env, cluster/serverless config
+├── spark_connect_backend.py  # All Spark operations via DatabricksSession
+├── .env.example           # Config template → copy to .env
+└── requirements.txt       # mcp[cli], databricks-connect
 ```
 
-**Transport modes:**
+**Transport modes (both servers):**
 - `stdio` — local IDE integration (default, no auth needed)
 - `sse` — remote EC2/ECS deployment (Server-Sent Events)
 - `streamable-http` — modern MCP HTTP transport (recommended for new deployments)
