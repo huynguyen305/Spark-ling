@@ -49,16 +49,12 @@ resources:
               - ${var.catalog}
               - "--schema"
               - ${var.schema}
-              - "--rds-host"
-              - "{{secrets/sparkling/rds_host}}"
+              - "--secret-scope"
+              - "sparkling"
               - "--rds-port"
               - "5432"
               - "--rds-database"
               - "sparkdb"
-              - "--rds-username"
-              - "{{secrets/sparkling/rds_username}}"
-              - "--rds-password"
-              - "{{secrets/sparkling/rds_password}}"
           environment_key: default
 
         # ── Task 2: Reporting transformations (stored procedure migration) ──
@@ -87,4 +83,4 @@ resources:
           spec:
             environment_version: "2"
             dependencies:
-              - whl: ../dist/*.whl
+              - ../dist/*.whl

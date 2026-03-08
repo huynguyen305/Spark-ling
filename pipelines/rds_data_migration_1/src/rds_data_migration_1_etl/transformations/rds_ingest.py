@@ -1,26 +1,34 @@
 import argparse
 from pyspark.sql import SparkSession
 
+def _get_dbutils(spark):
+    from pyspark.dbutils import DBUtils
+    return DBUtils(spark)
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--catalog", required=True)
     parser.add_argument("--schema", required=True)
-    parser.add_argument("--rds-host", required=True)
-    parser.add_argument("--rds-port", required=True)
-    parser.add_argument("--rds-database", required=True)
-    parser.add_argument("--rds-username", required=True)
-    parser.add_argument("--rds-password", required=True)
+    parser.add_argument("--secret-scope", default="sparkling",
+                        help="Databricks secret scope holding rds_host, rds_username, rds_password")
+    parser.add_argument("--rds-port", default="5432")
+    parser.add_argument("--rds-database", default="sparkdb")
     args = parser.parse_args()
 
     spark = SparkSession.builder.getOrCreate()
-    
+    dbutils = _get_dbutils(spark)
+
     catalog = args.catalog
     schema = args.schema
-    
-    jdbc_url = f"jdbc:postgresql://{args.rds_host}:{args.rds_port}/{args.rds_database}"
+
+    rds_host     = dbutils.secrets.get(scope=args.secret_scope, key="rds_host")
+    rds_username = dbutils.secrets.get(scope=args.secret_scope, key="rds_username")
+    rds_password = dbutils.secrets.get(scope=args.secret_scope, key="rds_password")
+
+    jdbc_url = f"jdbc:postgresql://{rds_host}:{args.rds_port}/{args.rds_database}"
     jdbc_properties = {
-        "user": args.rds_username,
-        "password": args.rds_password,
+        "user": rds_username,
+        "password": rds_password,
         "driver": "org.postgresql.Driver"
     }
 

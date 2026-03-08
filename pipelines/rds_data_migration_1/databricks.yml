@@ -11,7 +11,7 @@ include:
 artifacts:
   rds_data_migration_1:
     type: whl
-    build: python -m build
+    build: python3 -m build
     path: .
 
 # Variable declarations. These variables are assigned in the dev/prod targets below.

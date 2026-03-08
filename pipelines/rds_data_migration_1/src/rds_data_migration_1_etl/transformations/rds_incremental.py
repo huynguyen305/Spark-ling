@@ -37,6 +37,12 @@ from datetime import datetime, timezone
 
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
+from pyspark.sql.window import Window
+
+
+def _get_dbutils(spark):
+    from pyspark.dbutils import DBUtils
+    return DBUtils(spark)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -219,6 +225,19 @@ def _load_merge(
         logger.info("  No rows to merge for %s", fq_table)
         return 0
 
+    # Deduplicate source by merge keys — keeps the latest row per key
+    # (required by Delta MERGE: one source row per target row)
+    if "last_modified" in df.columns:
+        window_spec = Window.partitionBy(merge_keys).orderBy(F.col("last_modified").desc())
+        df = (
+            df.withColumn("_rn", F.row_number().over(window_spec))
+            .filter(F.col("_rn") == 1)
+            .drop("_rn")
+        )
+    else:
+        df = df.dropDuplicates(merge_keys)
+    count = df.count()
+
     # Register temp view for MERGE statement
     tmp_view = fq_table.replace(".", "_") + "_incremental"
     df.createOrReplaceTempView(tmp_view)
@@ -268,11 +287,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="RDS → Unity Catalog incremental CDC load")
     parser.add_argument("--catalog", required=True, help="Unity Catalog catalog name")
     parser.add_argument("--schema", required=True, help="Schema / database name")
-    parser.add_argument("--rds-host", required=True)
+    parser.add_argument("--secret-scope", default="sparkling",
+                        help="Databricks secret scope holding rds_host, rds_username, rds_password")
     parser.add_argument("--rds-port", default="5432")
     parser.add_argument("--rds-database", default="sparkdb")
-    parser.add_argument("--rds-username", required=True)
-    parser.add_argument("--rds-password", required=True)
     parser.add_argument(
         "--full-refresh-dims",
         action="store_true",
@@ -284,8 +302,13 @@ def main() -> None:
     spark = SparkSession.builder.getOrCreate()
     spark.conf.set("spark.sql.session.timeZone", "UTC")
 
-    jdbc_url = _jdbc_url(args.rds_host, args.rds_port, args.rds_database)
-    jdbc_props = _jdbc_props(args.rds_username, args.rds_password)
+    dbutils = _get_dbutils(spark)
+    rds_host     = dbutils.secrets.get(scope=args.secret_scope, key="rds_host")
+    rds_username = dbutils.secrets.get(scope=args.secret_scope, key="rds_username")
+    rds_password = dbutils.secrets.get(scope=args.secret_scope, key="rds_password")
+
+    jdbc_url = _jdbc_url(rds_host, args.rds_port, args.rds_database)
+    jdbc_props = _jdbc_props(rds_username, rds_password)
 
     # Ensure schema and watermark table exist
     spark.sql(f"CREATE SCHEMA IF NOT EXISTS {args.catalog}.{args.schema}")

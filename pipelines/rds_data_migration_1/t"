@@ -1,0 +1,9 @@
+Databricks CLI v0.292.0 found at /usr/local/bin/databricks
+Your current $PATH prefers running CLI v0.18.0 at /home/huyng/.local/bin/databricks
+
+Because both are installed and available in $PATH, I assume you are trying to run the newer version.
+If you want to disable this behavior you can set DATABRICKS_CLI_DO_NOT_EXECUTE_NEWER_VERSION=1.
+
+Executing CLI v0.292.0...
+-------------------------
+Error: unknown command "runs" for "databricks"
