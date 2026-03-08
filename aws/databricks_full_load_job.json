@@ -1,0 +1,33 @@
+{
+  "name": "Spark-ling Full Load Migration (RDS to S3 Bronze)",
+  "tasks": [
+    {
+      "task_key": "extract_and_load",
+      "description": "Extract RDS to Parquet landing then to Delta Bronze",
+      "new_cluster": {
+        "spark_version": "13.3.x-scala2.12",
+        "node_type_id": "i3.xlarge",
+        "num_workers": 2,
+        "spark_env_vars": {
+          "RDS_HOST": "sparkling-postgres-db.c3oweiuwo3lj.ap-southeast-1.rds.amazonaws.com",
+          "RDS_PORT": "5432",
+          "RDS_DATABASE": "sparkdb",
+          "RDS_USERNAME": "sparkadmin",
+          "RDS_PASSWORD": "SparkLing2026!",
+          "S3_BUCKET": "sparkling-data-test",
+          "AWS_REGION": "ap-southeast-1"
+        }
+      },
+      "spark_python_task": {
+        "python_file": "dbfs:/FileStore/sparkling/full_load_pipeline.py"
+      },
+      "libraries": [
+        {
+          "maven": {
+            "coordinates": "org.postgresql:postgresql:42.7.3"
+          }
+        }
+      ]
+    }
+  ]
+}

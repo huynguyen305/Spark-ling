@@ -228,8 +228,9 @@ def merge_to_bronze(spark, incremental_df, s3_bucket: str,
     merge_key = merge_keys.get(table_name, "txn_id")
 
     try:
-        # Try to load existing Delta table
-        delta_table = DeltaTable.forPath(spark, bronze_path)
+        # Try to load existing Delta table from Unity Catalog
+        table_path = f"sparkling.bronze.{table_name.lower()}"
+        delta_table = DeltaTable.forName(spark, table_path)
 
         print(f"      🔀 Merging into existing Bronze table on {merge_key}...")
         delta_table.alias("target").merge(
@@ -240,16 +241,22 @@ def merge_to_bronze(spark, incremental_df, s3_bucket: str,
          .execute()
 
         # Get updated count
-        updated_count = spark.read.format("delta").load(bronze_path).count()
-        print(f"      ✅ Bronze table now has {updated_count:,} total rows")
+        updated_count = spark.table(table_path).count()
+        print(f"      ✅ Bronze table {table_path} now has {updated_count:,} total rows")
 
     except Exception as e:
         # LEARNING: If Delta table doesn't exist yet, fall back to full write.
         # This happens on the very first incremental run.
-        if "is not a Delta table" in str(e) or "Path does not exist" in str(e):
-            print(f"      ⚠️  Bronze table not found, creating new...")
-            df_with_meta.write.format("delta").mode("overwrite").save(bronze_path)
-            print(f"      ✅ Bronze table created with {df_with_meta.count():,} rows")
+        if "is not a Delta table" in str(e) or "Path does not exist" in str(e) or "TABLE_OR_VIEW_NOT_FOUND" in str(e):
+            print(f"      ⚠️  Bronze table not found, creating new in Unity Catalog...")
+            spark.sql("CREATE SCHEMA IF NOT EXISTS sparkling.bronze")
+            
+            df_with_meta.write \
+                .format("delta") \
+                .mode("overwrite") \
+                .option("path", bronze_path) \
+                .saveAsTable(table_path)
+            print(f"      ✅ Bronze table {table_path} created with {df_with_meta.count():,} rows")
         else:
             raise
 

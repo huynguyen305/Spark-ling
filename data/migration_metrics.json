@@ -1,0 +1,43 @@
+{
+  "pipeline": "full_load",
+  "timestamp": "2026-03-08T03:32:42.453992",
+  "tables": {
+    "dim_account_type": {
+      "status": "success",
+      "row_count": 6,
+      "timestamp": "2026-03-08T03:31:41.462952"
+    }
+  },
+  "validation": {
+    "dim_date": {
+      "source_count": 2557,
+      "bronze_count": 2557,
+      "match": true
+    },
+    "dim_branch": {
+      "source_count": 100,
+      "bronze_count": 100,
+      "match": true
+    },
+    "dim_account_type": {
+      "source_count": 6,
+      "bronze_count": 6,
+      "match": true
+    },
+    "dim_customer": {
+      "source_count": 12235,
+      "bronze_count": 12235,
+      "match": true
+    },
+    "fact_transaction": {
+      "source_count": 5627026,
+      "bronze_count": 3711534,
+      "match": false
+    },
+    "fact_daily_balance": {
+      "source_count": 2960000,
+      "bronze_count": 2960000,
+      "match": true
+    }
+  }
+}

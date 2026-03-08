@@ -164,37 +164,50 @@ def get_spark_session():
     - hadoop-aws: Enables Spark to write to S3
     - fs.s3a.*: S3 authentication (uses EC2 instance profile or env vars)
     """
-    from pyspark.sql import SparkSession
+    import os
 
-    builder = SparkSession.builder \
-        .appName("FullLoadMigration-RDS-to-Bronze") \
-        .master("local[*]") \
-        .config("spark.driver.memory", "4g") \
-        .config("spark.sql.shuffle.partitions", "16") \
-        .config("spark.sql.adaptive.enabled", "true") \
-        .config("spark.jars.packages",
-                "org.postgresql:postgresql:42.7.3,"
-                "org.apache.hadoop:hadoop-aws:3.3.4,"
-                "io.delta:delta-spark_2.12:3.1.0") \
-        .config("spark.sql.extensions",
-                "io.delta.sql.DeltaSparkSessionExtension") \
-        .config("spark.sql.catalog.spark_catalog",
-                "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+    # Check if we should use Databricks Connect
+    # M2M tokens, or DATABRICKS_HOST/TOKEN env variables can drive this
+    try:
+        from databricks.connect import DatabricksSession
+        print("\n🚀 Initializing Databricks Connect session (Serverless)...")
+        builder = DatabricksSession.builder.serverless(True)
+        is_databricks = True
+    except ImportError:
+        from pyspark.sql import SparkSession
+        builder = SparkSession.builder.appName("FullLoadMigration-RDS-to-Bronze")
+        is_databricks = "DATABRICKS_RUNTIME_VERSION" in os.environ
 
-    # S3 credentials (from environment or IAM role)
-    if os.environ.get("AWS_ACCESS_KEY_ID"):
+    if not is_databricks:
+        # Local execution configurations
         builder = builder \
-            .config("spark.hadoop.fs.s3a.access.key",
-                    os.environ["AWS_ACCESS_KEY_ID"]) \
-            .config("spark.hadoop.fs.s3a.secret.key",
-                    os.environ["AWS_SECRET_ACCESS_KEY"]) \
-            .config("spark.hadoop.fs.s3a.endpoint",
-                    f"s3.{os.environ.get('AWS_REGION', 'ap-southeast-1')}.amazonaws.com")
-    else:
-        # Use Default credentials chain (works with ~/.aws/credentials, ENV vars, or EC2/EMR roles)
-        builder = builder \
-            .config("spark.hadoop.fs.s3a.aws.credentials.provider",
-                    "com.amazonaws.auth.DefaultAWSCredentialsProviderChain")
+            .master("local[*]") \
+            .config("spark.driver.memory", "4g") \
+            .config("spark.sql.shuffle.partitions", "16") \
+            .config("spark.sql.adaptive.enabled", "true") \
+            .config("spark.jars.packages",
+                    "org.postgresql:postgresql:42.7.3,"
+                    "org.apache.hadoop:hadoop-aws:3.3.4,"
+                    "io.delta:delta-spark_2.12:3.1.0") \
+            .config("spark.sql.extensions",
+                    "io.delta.sql.DeltaSparkSessionExtension") \
+            .config("spark.sql.catalog.spark_catalog",
+                    "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+
+        # S3 credentials (from environment or IAM role)
+        if os.environ.get("AWS_ACCESS_KEY_ID"):
+            builder = builder \
+                .config("spark.hadoop.fs.s3a.access.key",
+                        os.environ["AWS_ACCESS_KEY_ID"]) \
+                .config("spark.hadoop.fs.s3a.secret.key",
+                        os.environ["AWS_SECRET_ACCESS_KEY"]) \
+                .config("spark.hadoop.fs.s3a.endpoint",
+                        f"s3.{os.environ.get('AWS_REGION', 'ap-southeast-1')}.amazonaws.com")
+        else:
+            # Use Default credentials chain (works with ~/.aws/credentials, ENV vars, or EC2/EMR roles)
+            builder = builder \
+                .config("spark.hadoop.fs.s3a.aws.credentials.provider",
+                        "com.amazonaws.auth.DefaultAWSCredentialsProviderChain")
 
     return builder.getOrCreate()
 
@@ -323,13 +336,17 @@ def register_bronze_delta(spark, s3_bucket: str, table_name: str):
         .withColumn("_source_system", lit("postgresql_rds")) \
         .withColumn("_batch_id", lit(batch_id))
 
+    # Also register the table into the Unity Catalog under the sparkling catalog and bronze schema
+    spark.sql("CREATE SCHEMA IF NOT EXISTS sparkling.bronze")
+
     df_bronze.write \
         .format("delta") \
         .mode("overwrite") \
-        .save(bronze_path)
+        .option("path", bronze_path) \
+        .saveAsTable(f"sparkling.bronze.{table_name.lower()}")
 
     count = df_bronze.count()
-    print(f"      ✅ Bronze table created: {count:,} rows")
+    print(f"      ✅ Bronze table created and registered to sparkling.bronze.{table_name.lower()}: {count:,} rows")
     return count
 
 
