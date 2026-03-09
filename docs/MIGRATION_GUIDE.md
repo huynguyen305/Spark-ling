@@ -463,3 +463,190 @@ USING DELTA LOCATION 's3://sparkling-data-test/migration/bronze/fact_transaction
 | S3 access denied | Missing AWS credentials | Set `AWS_ACCESS_KEY_ID` or use IAM role |
 | Delta table not found | Full load not run yet | Run `full_load_pipeline.py` first |
 | Watermark not advancing | No new data in RDS | Run `rds_daily_generator.py` |
+
+---
+
+## Known Issues & Solutions
+
+### CDC Pipeline
+
+> [!WARNING]
+> **Issue 1 — Watermark Precision: Truncation Causes Duplicate or Skipped Rows**
+>
+> **File**: `pipelines/rds_data_migration_1/rds_incremental.py`
+>
+> `_get_watermark()` formats the stored `TIMESTAMP` with `strftime('%Y-%m-%d %H:%M:%S')`,
+> which drops sub-second precision. Because the extraction predicate is
+> `last_modified > watermark`, truncating can cause rows to be re-read (duplicates for
+> append-only tables) or skipped depending on how the watermark advances.
+
+**Solution**: Store and compare watermarks with full timestamp precision (including
+microseconds), or use a `(timestamp, id)` composite watermark.
+
+```python
+# Preserve full timestamp precision for the watermark (no truncation)
+new_wm = new_max_ts if new_max_ts else watermark
+```
+
+---
+
+> [!WARNING]
+> **Issue 2 — Watermark Persistence: `TIMESTAMP('...')` Constructor Not Supported in Spark SQL**
+>
+> **File**: `pipelines/rds_data_migration_1/rds_incremental.py`
+>
+> Spark SQL does not support `TIMESTAMP('...')` as a constructor. This will fail at runtime
+> when updating the watermark table.
+
+**Solution**: Use a Databricks-supported timestamp cast instead.
+
+```sql
+CAST('{new_watermark}' AS TIMESTAMP) AS last_watermark,
+```
+
+---
+
+> [!WARNING]
+> **Issue 3 — Redundant `df.count()` Actions: Performance Impact**
+>
+> **File**: `pipelines/rds_data_migration_1/rds_incremental.py`
+>
+> Multiple `df.count()` actions are called on the same incremental DataFrames —
+> `_extract_cdc()` counts, then `_load_append()` counts again (sometimes twice). On large
+> tables this will materially slow the job and add cluster cost.
+
+**Solution**: Compute the count once (or check emptiness via `limit(1)` / `head(1)`),
+reuse it for logging and watermark updates. Consider caching the incremental DataFrame if it
+is reused for max-ts computation and the write step.
+
+---
+
+### Reporting Transforms
+
+> [!WARNING]
+> **Issue 4 — Month Boundary Logic Is Brittle and Can Miss Rows**
+>
+> **File**: `pipelines/rds_data_migration_1/rds_reporting_transform.py`
+>
+> Computing `end_date` via `datetime(...).__class__(...) - __import__('datetime').timedelta(...)`
+> is brittle, and filtering `txn_datetime <= end_date + ' 23:59:59'` creates an exclusive
+> boundary that silently drops transactions with sub-second timestamps in the final second of
+> the month (e.g., a row at `23:59:59.500` is greater than `23:59:59` and is therefore
+> excluded).
+
+**Solution**: Compute `start_date` and `end_date_plus1` (first day of the next month) and
+use a half-open interval:
+
+```sql
+txn_datetime >= start_date AND txn_datetime < end_date_plus1
+```
+
+---
+
+> [!WARNING]
+> **Issue 5 — `totals_row.collect()` Triggered Twice**
+>
+> **File**: `pipelines/rds_data_migration_1/rds_reporting_transform.py`
+>
+> `totals_row.collect()` is executed twice, which triggers two separate Spark actions and
+> can recompute `channel_base` twice unnecessarily.
+
+**Solution**: Collect once into a local variable using `.first()` (preferred over
+`.collect()[0]` for single-row results) and derive both values from that single call:
+
+```python
+totals = totals_row.first()  # .first() avoids collecting a full list for a single row
+grand_txn_count = totals["grand_txn_count"]
+grand_volume    = totals["grand_volume"]
+```
+
+---
+
+> [!WARNING]
+> **Issue 6 — `_replace_partition()` Silently Swallows All Exceptions**
+>
+> **File**: `pipelines/rds_data_migration_1/rds_reporting_transform.py`
+>
+> `_replace_partition()` catches a blanket `Exception` and silently `pass`es. This hides
+> real failures (permission errors, malformed table name, non-Delta table, etc.) and then
+> proceeds to append data — potentially creating duplicates or partial results.
+
+**Solution**: Catch only the expected "table not found" / analysis exception and log or
+re-raise all other errors.
+
+---
+
+### Job Configuration
+
+> [!WARNING]
+> **Issue 7 — Hardcoded Personal Notification Email**
+>
+> **File**: `pipelines/rds_data_migration_1/resources/rds_daily_job.yml`
+>
+> The job notification email is hardcoded to a personal address, which is hard to maintain
+> across environments and may be inappropriate to commit to the repository.
+
+**Solution**: Make the recipient configurable via a bundle variable:
+
+```yaml
+- ${var.rds_daily_job_failure_email}
+```
+
+---
+
+### Documentation & Security
+
+> [!WARNING]
+> **Issue 8 — Real Databricks Workspace Hostname Hardcoded in Docs**
+>
+> **Files**: `docs/DATABRICKS_CONNECT.md`, `docs/MCP_GUIDE.md`,
+> `mcp_databricks_connect/README.md`
+>
+> A real Databricks workspace hostname (`dbc-cdbdfd07-5797.cloud.databricks.com`) is
+> hardcoded in committed documentation and example `.env` files. This leaks internal
+> environment details and makes the guides non-reusable by others.
+
+**Solution**: Replace with an obvious placeholder in all committed docs and keep real
+hostnames only in local `.env` files (which should be git-ignored):
+
+```env
+DATABRICKS_HOST=https://<your-workspace-host>
+```
+
+---
+
+> [!WARNING]
+> **Issue 9 — Real RDS Infrastructure Identifiers Hardcoded in Notebook**
+>
+> **File**: `notebooks/12_rds_to_databricks_pipeline.ipynb`
+>
+> The notebook hardcodes a specific RDS endpoint and a default username, committing real
+> infrastructure identifiers to source control. This risks accidental use against production.
+
+**Solution**: Read connection details from environment variables or Databricks secrets, with
+safe placeholders as defaults:
+
+```python
+RDS_HOST     = os.getenv("RDS_HOST", "<rds-host>")
+RDS_PORT     = os.getenv("RDS_PORT", "5432")
+RDS_DATABASE = os.getenv("RDS_DATABASE", "<rds-database>")
+RDS_USERNAME = os.getenv("RDS_USERNAME", "<rds-username>")
+RDS_PASSWORD = os.getenv("RDS_PASSWORD")  # must be set via env var or secret
+```
+
+---
+
+> [!WARNING]
+> **Issue 10 — Personal Local Path Hardcoded in IDE Config Examples**
+>
+> **File**: `mcp_databricks_connect/README.md`
+>
+> IDE config examples embed a specific local username/path (`/home/huynguyenle/...`),
+> leaking personal information and making the examples not copy/paste friendly for other
+> contributors.
+
+**Solution**: Replace with a generic placeholder:
+
+```json
+"command": "<path-to-repo>/.venv/bin/python"
+```
