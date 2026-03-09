@@ -38,7 +38,7 @@ def create_spark_session():
         from databricks.connect import DatabricksSession
         spark = DatabricksSession.builder.serverless().getOrCreate()
         print(f"✅ Databricks Connect | Spark {spark.version}")
-        print( "   Tracking: https://dbc-cdbdfd07-5797.cloud.databricks.com → Job runs")
+        print( "   Tracking: https://dbc-a460ab68-eabd.cloud.databricks.com → Job runs")
         return spark, "databricks"
 
     except Exception as e:

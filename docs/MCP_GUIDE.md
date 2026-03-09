@@ -61,7 +61,7 @@ cp mcp_databricks_connect/.env.example mcp_databricks_connect/.env
 `mcp_databricks_connect/.env`:
 
 ```env
-DATABRICKS_HOST=https://dbc-cdbdfd07-5797.cloud.databricks.com
+DATABRICKS_HOST=https://dbc-a460ab68-eabd.cloud.databricks.com
 DATABRICKS_TOKEN=dapi...your-personal-access-token...
 
 # Unity Catalog defaults (tables migrated from RDS)

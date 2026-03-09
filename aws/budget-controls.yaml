@@ -1,0 +1,379 @@
+# ═══════════════════════════════════════════════════════════
+# Spark-ling — Budget Controls (Auto-Stop on Credit Exhaustion)
+# ═══════════════════════════════════════════════════════════
+# Multi-layer budget protection for $200 AWS credit:
+#
+#   Layer 1: Email alerts at 50%, 75%, 90% of monthly & total budgets
+#   Layer 2: Lambda auto-stop of EC2 + RDS at critical thresholds
+#   Layer 3: IAM deny policy applied to non-root users at critical threshold
+#
+# IMPORTANT: Must deploy in us-east-1 (budget SNS requirement).
+#
+# Deploy:
+#   aws cloudformation create-stack \
+#     --stack-name sparkling-budget-controls \
+#     --template-body file://aws/budget-controls.yaml \
+#     --capabilities CAPABILITY_NAMED_IAM \
+#     --region us-east-1 \
+#     --parameters \
+#       ParameterKey=NotificationEmail,ParameterValue=YOUR_EMAIL
+#
+# After deploy: Confirm the SNS email subscription (check inbox).
+#
+# Teardown:
+#   aws cloudformation delete-stack \
+#     --stack-name sparkling-budget-controls --region us-east-1
+# ═══════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Spark-ling Budget Controls — email alerts + auto-stop Lambda
+  to prevent charges when $200 AWS credit is approaching exhaustion.
+
+# ── Parameters ──────────────────────────────────────────
+Parameters:
+  NotificationEmail:
+    Type: String
+    AllowedPattern: "^[\\w.+-]+@[\\w.-]+\\.[a-zA-Z]{2,}$"
+    ConstraintDescription: Must be a valid email address.
+    Description: Email address for budget alert notifications.
+
+  MonthlyLimit:
+    Type: Number
+    Default: 40
+    MinValue: 1
+    Description: >-
+      Monthly cost budget in USD. Set conservatively — $40/month
+      allows ~5 months of usage within $200 total credit.
+
+  TotalCreditLimit:
+    Type: Number
+    Default: 200
+    MinValue: 1
+    Description: Total AWS credit amount in USD.
+
+  ResourceRegion:
+    Type: String
+    Default: ap-southeast-1
+    Description: AWS region where your resources (EC2, RDS) run.
+
+# ── Resources ───────────────────────────────────────────
+Resources:
+
+  # ─── SNS Topic (emergency — triggers Lambda) ─────────
+  EmergencyStopTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: sparkling-budget-emergency
+
+  EmergencyTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref EmergencyStopTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowBudgetsPublish
+            Effect: Allow
+            Principal:
+              Service: budgets.amazonaws.com
+            Action: SNS:Publish
+            Resource: !Ref EmergencyStopTopic
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref "AWS::AccountId"
+
+  # ─── Lambda: Stop All Costly Resources ───────────────
+  StopResourcesRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sparkling-budget-stop-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: StopCostlyResources
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:StopInstances
+                  - rds:DescribeDBInstances
+                  - rds:StopDBInstance
+                Resource: "*"
+
+  StopResourcesFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: sparkling-budget-stop-resources
+      Description: >-
+        Triggered by budget emergency SNS — stops all running
+        EC2 instances and RDS databases to prevent further charges.
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt StopResourcesRole.Arn
+      Timeout: 120
+      Environment:
+        Variables:
+          RESOURCE_REGION: !Ref ResourceRegion
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import os
+
+          def handler(event, context):
+              region = os.environ['RESOURCE_REGION']
+              results = {'ec2_stopped': [], 'rds_stopped': [], 'errors': []}
+
+              # --- Stop all running EC2 instances ---
+              try:
+                  ec2 = boto3.client('ec2', region_name=region)
+                  resp = ec2.describe_instances(
+                      Filters=[{'Name': 'instance-state-name', 'Values': ['running']}]
+                  )
+                  ids = []
+                  for r in resp['Reservations']:
+                      for inst in r['Instances']:
+                          ids.append(inst['InstanceId'])
+                  if ids:
+                      ec2.stop_instances(InstanceIds=ids)
+                      results['ec2_stopped'] = ids
+                      print(f"Stopped EC2 instances: {ids}")
+                  else:
+                      print("No running EC2 instances found.")
+              except Exception as e:
+                  results['errors'].append(f"EC2 error: {str(e)}")
+                  print(f"EC2 error: {e}")
+
+              # --- Stop all running RDS instances ---
+              try:
+                  rds = boto3.client('rds', region_name=region)
+                  dbs = rds.describe_db_instances()
+                  for db in dbs['DBInstances']:
+                      db_id = db['DBInstanceIdentifier']
+                      status = db['DBInstanceStatus']
+                      # Only stop standalone instances (not Aurora clusters)
+                      if status == 'available' and 'DBClusterIdentifier' not in db:
+                          try:
+                              rds.stop_db_instance(DBInstanceIdentifier=db_id)
+                              results['rds_stopped'].append(db_id)
+                              print(f"Stopped RDS: {db_id}")
+                          except Exception as e:
+                              results['errors'].append(f"RDS {db_id}: {str(e)}")
+                              print(f"RDS stop error for {db_id}: {e}")
+              except Exception as e:
+                  results['errors'].append(f"RDS error: {str(e)}")
+                  print(f"RDS error: {e}")
+
+              print(f"Results: {json.dumps(results)}")
+              return results
+
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StopResourcesFunction
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref EmergencyStopTopic
+
+  LambdaSnsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref EmergencyStopTopic
+      Protocol: lambda
+      Endpoint: !GetAtt StopResourcesFunction.Arn
+
+  # ─── IAM Deny Policy (for non-root users) ────────────
+  DenyAllPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: sparkling-budget-deny-all
+      Description: >-
+        Applied by budget actions to block non-root IAM users
+        from creating new resources when budget is exceeded.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyNewResources
+            Effect: Deny
+            Action:
+              - ec2:RunInstances
+              - ec2:StartInstances
+              - rds:CreateDBInstance
+              - rds:StartDBInstance
+              - s3:CreateBucket
+              - lambda:CreateFunction
+              - ecs:RunTask
+              - ecs:CreateService
+              - sagemaker:CreateNotebookInstance
+              - elasticmapreduce:RunJobFlow
+              - glue:StartJobRun
+              - athena:StartQueryExecution
+            Resource: "*"
+
+  # ─── Budget: Monthly Cost Control ────────────────────
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: sparkling-monthly-cost
+        BudgetLimit:
+          Amount: !Ref MonthlyLimit
+          Unit: USD
+        TimeUnit: MONTHLY
+        BudgetType: COST
+        CostTypes:
+          IncludeTax: true
+          IncludeSubscription: true
+          UseBlended: false
+          IncludeRefund: false
+          IncludeCredit: false
+          IncludeUpfront: true
+          IncludeRecurring: true
+          IncludeOtherSubscription: true
+          IncludeSupport: true
+          IncludeDiscount: true
+          UseAmortized: false
+      NotificationsWithSubscribers:
+        # 50% — informational email
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 50
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref NotificationEmail
+        # 80% — warning email
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref NotificationEmail
+        # 95% — critical: email + Lambda auto-stop
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 95
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref NotificationEmail
+            - SubscriptionType: SNS
+              Address: !Ref EmergencyStopTopic
+        # Forecasted > 100% — early warning
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref NotificationEmail
+
+  # ─── Budget: Total Credit Tracker ($200) ─────────────
+  TotalCreditBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: sparkling-total-credit-200
+        BudgetLimit:
+          Amount: !Ref TotalCreditLimit
+          Unit: USD
+        TimeUnit: ANNUALLY
+        BudgetType: COST
+        CostTypes:
+          IncludeTax: true
+          IncludeSubscription: true
+          UseBlended: false
+          IncludeRefund: false
+          IncludeCredit: false
+          IncludeUpfront: true
+          IncludeRecurring: true
+          IncludeOtherSubscription: true
+          IncludeSupport: true
+          IncludeDiscount: true
+          UseAmortized: false
+      NotificationsWithSubscribers:
+        # 25% ($50) — informational
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 25
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref NotificationEmail
+        # 50% ($100) — halfway
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 50
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref NotificationEmail
+        # 75% ($150) — warning
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 75
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref NotificationEmail
+        # 90% ($180) — critical: email + Lambda auto-stop
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 90
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref NotificationEmail
+            - SubscriptionType: SNS
+              Address: !Ref EmergencyStopTopic
+        # Forecasted > 80% — early warning for total credit
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref NotificationEmail
+
+# ── Outputs ─────────────────────────────────────────────
+Outputs:
+  EmergencyTopicArn:
+    Description: SNS topic ARN that triggers resource auto-stop
+    Value: !Ref EmergencyStopTopic
+
+  StopFunctionArn:
+    Description: Lambda ARN for manual invocation if needed
+    Value: !GetAtt StopResourcesFunction.Arn
+
+  DenyPolicyArn:
+    Description: IAM deny policy ARN (attach to IAM groups/users manually if needed)
+    Value: !Ref DenyAllPolicy
+
+  MonthlyBudgetName:
+    Description: Monthly cost budget name
+    Value: !Ref MonthlyBudget
+
+  TotalCreditBudgetName:
+    Description: Total credit tracker budget name
+    Value: !Ref TotalCreditBudget

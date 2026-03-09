@@ -20,14 +20,18 @@ NUM_CUSTOMERS = 10_000
 NUM_BRANCHES = 100
 NUM_TRANSACTIONS = 5_000_000
 
-# ── Get Spark session (pre-created on Databricks) ──────────
+# ── Get Spark session (Databricks Connect or pre-created) ──
+from databricks.connect import DatabricksSession
 from pyspark.sql import SparkSession, Row
 from pyspark.sql import functions as F
 from pyspark.sql.types import *
 import random
 import numpy as np
 
-spark = SparkSession.builder.getOrCreate()
+try:
+    spark = DatabricksSession.builder.serverless().getOrCreate()
+except Exception:
+    spark = SparkSession.builder.getOrCreate()
 
 print("╔═══════════════════════════════════════════╗")
 print("║  🏦 Generate Banking Data → S3            ║")

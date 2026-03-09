@@ -68,7 +68,7 @@ graph TB
 | **OS** | WSL Ubuntu 24.04 |
 | **Python** | 3.12 (via `.venv`) |
 | **Local engine** | Databricks Connect 17.3.6 (remote → DBR 4.1.0) |
-| **Databricks host** | `https://dbc-cdbdfd07-5797.cloud.databricks.com` |
+| **Databricks host** | `https://dbc-a460ab68-eabd.cloud.databricks.com` |
 | **Storage** | `s3://sparkling-data-test` (ap-southeast-1) |
 | **AWS Account** | `085587597183` |
 | **IAM Role** | `sparkling-databricks-role` |
@@ -205,7 +205,7 @@ pip install <package>
 cat ~/.databrickscfg
 # Should show:
 # [DEFAULT]
-# host  = https://dbc-cdbdfd07-5797.cloud.databricks.com
+# host  = https://dbc-a460ab68-eabd.cloud.databricks.com
 # token = dapi...
 ```
 

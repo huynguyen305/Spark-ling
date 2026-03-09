@@ -1,0 +1,41 @@
+{
+    "Budgets": [
+        {
+            "BudgetName": "Monthly-Cost-Budget-50USD",
+            "BudgetLimit": {
+                "Amount": "50.0",
+                "Unit": "USD"
+            },
+            "CostTypes": {
+                "IncludeTax": true,
+                "IncludeSubscription": true,
+                "UseBlended": false,
+                "IncludeRefund": false,
+                "IncludeCredit": false,
+                "IncludeUpfront": true,
+                "IncludeRecurring": true,
+                "IncludeOtherSubscription": true,
+                "IncludeSupport": true,
+                "IncludeDiscount": true,
+                "UseAmortized": false
+            },
+            "TimeUnit": "MONTHLY",
+            "TimePeriod": {
+                "Start": "2026-03-01T00:00:00+00:00",
+                "End": "2087-06-15T00:00:00+00:00"
+            },
+            "CalculatedSpend": {
+                "ActualSpend": {
+                    "Amount": "6.296",
+                    "Unit": "USD"
+                }
+            },
+            "BudgetType": "COST",
+            "LastUpdatedTime": "2026-03-09T02:01:20.037000+00:00",
+            "HealthStatus": {
+                "Status": "HEALTHY",
+                "LastUpdatedTime": "2026-03-09T02:01:19.517000+00:00"
+            }
+        }
+    ]
+}

@@ -30,14 +30,14 @@ targets:
     mode: development
     default: true
     workspace:
-      host: https://dbc-cdbdfd07-5797.cloud.databricks.com
+      host: https://dbc-a460ab68-eabd.cloud.databricks.com
     variables:
       catalog: sparkling
       schema: ${workspace.current_user.short_name}
   prod:
     mode: production
     workspace:
-      host: https://dbc-cdbdfd07-5797.cloud.databricks.com
+      host: https://dbc-a460ab68-eabd.cloud.databricks.com
       # We explicitly deploy to /Workspace/Users/huynguyen30593@outlook.com to make sure we only have a single copy.
       root_path: /Workspace/Users/huynguyen30593@outlook.com/.bundle/${bundle.name}/${bundle.target}
     variables:

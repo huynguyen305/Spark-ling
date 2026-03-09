@@ -72,7 +72,7 @@ python -c "import databricks.connect; print('✅ databricks-connect installed')"
 # Create the credentials file directly (no Databricks CLI needed)
 cat > ~/.databrickscfg << 'EOF'
 [DEFAULT]
-host  = https://dbc-cdbdfd07-5797.cloud.databricks.com
+host  = https://dbc-a460ab68-eabd.cloud.databricks.com
 token = <your-personal-access-token>
 EOF
 ```

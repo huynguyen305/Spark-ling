@@ -47,7 +47,7 @@ graph TB
 | **AWS Region** | `ap-southeast-1` (Singapore) |
 | **AWS Account ID** | `085587597183` |
 | **IAM Role** | `arn:aws:iam::085587597183:role/sparkling-databricks-role` |
-| **Databricks host** | `https://dbc-cdbdfd07-5797.cloud.databricks.com` |
+| **Databricks host** | `https://dbc-a460ab68-eabd.cloud.databricks.com` |
 
 ---
 
@@ -83,7 +83,7 @@ cp aws/.env.example aws/.env
 # AWS_REGION=ap-southeast-1
 # AWS_ACCOUNT_ID=085587597183
 # S3_BUCKET=sparkling-data-test
-# DATABRICKS_HOST=https://dbc-cdbdfd07-5797.cloud.databricks.com
+# DATABRICKS_HOST=https://dbc-a460ab68-eabd.cloud.databricks.com
 
 # aws/.env is gitignored — safe to store real values there
 ```

@@ -78,7 +78,7 @@ pip install "databricks-connect==17.3.*" ipykernel
 ```bash
 cat > ~/.databrickscfg << 'EOF'
 [DEFAULT]
-host  = https://dbc-cdbdfd07-5797.cloud.databricks.com
+host  = https://dbc-a460ab68-eabd.cloud.databricks.com
 token = <your-personal-access-token>
 EOF
 ```

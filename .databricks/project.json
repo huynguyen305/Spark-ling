@@ -1,0 +1,5 @@
+{
+  "host": "https://dbc-a460ab68-eabd.cloud.databricks.com/",
+  "authType": "pat",
+  "serverlessComputeId": "auto"
+}
